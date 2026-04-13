@@ -576,10 +576,11 @@ function initSegmentosView() {
       <div class="seg-name">${seg}</div>
       <div class="seg-count">${count.toLocaleString('pt-BR')}</div>
       <div class="seg-label">leads neste segmento</div>
-    \`;
+    `
     container.appendChild(div);
   });
 }
+
 
 /* ─── Prospecção View & Kanban ────────────────────────────────── */
 let prospeccaoViewInitialized = false;
@@ -602,7 +603,7 @@ function initProspeccaoView() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
-      alert(\`Disparo concluído: \${data.disparados} mensagens enviadas!\`);
+      alert(`Disparo concluído: ${data.disparados} mensagens enviadas!`);
       clearApiError();
       loadProspeccaoKanban();
     } catch (err) {
@@ -620,15 +621,15 @@ async function loadIaInsights() {
   try {
     const res = await fetchJson('/api/ai/insights');
     if (res.error) throw new Error(res.error);
-    container.innerHTML = \`
-      <p style="margin-bottom:8px"><strong>Estratégia sugerida:</strong> \${res.recomendacao_estrategica || 'Nenhuma recomendação técnica no momento'}</p>
-      \${res.alerta ? \\\`<p style="color:#ef4444;margin-bottom:8px"><strong>⚡ Alerta:</strong> \\\${res.alerta}</p>\\\` : ''}
+    container.innerHTML = `
+      <p style="margin-bottom:8px"><strong>Estratégia sugerida:</strong> ${res.recomendacao_estrategica || 'Nenhuma recomendação técnica no momento'}</p>
+      ${res.alerta ? `<p style="color:#ef4444;margin-bottom:8px"><strong>⚡ Alerta:</strong> ${res.alerta}</p>` : ''}
       <ul>
-         <li>🎯 Foco Atual: <strong>\${res.cidade_prioridade || '-'}</strong></li>
-         <li>📌 Nicho Sugerido: <strong>\${res.melhores_segmentos ? res.melhores_segmentos[0] : '-'}</strong></li>
-         <li>⏰ Sazonalidade: <strong>\${res.gatilho_sazonal || 'Sem tendência mapeada'}</strong></li>
+         <li>🎯 Foco Atual: <strong>${res.cidade_prioridade || '-'}</strong></li>
+         <li>📌 Nicho Sugerido: <strong>${res.melhores_segmentos ? res.melhores_segmentos[0] : '-'}</strong></li>
+         <li>⏰ Sazonalidade: <strong>${res.gatilho_sazonal || 'Sem tendência mapeada'}</strong></li>
       </ul>
-    \`;
+    `;
   } catch (err) {
     container.innerHTML = '<p class="ia-loading">Não foi possível carregar os insights. O Gemini pode estar indisponível.</p>';
   }
@@ -658,22 +659,22 @@ async function loadProspeccaoKanban() {
       card.className = 'kb-card';
       let titleParams = '';
       if(lead.intentDetectado) {
-         titleParams = \`<div class="kb-intent">🎯 \${lead.intentDetectado.tipo.toUpperCase()} (Urgência: \${lead.intentDetectado.urgencia})</div>\`;
+         titleParams = `<div class="kb-intent">🎯 ${lead.intentDetectado.tipo.toUpperCase()} (Urgência: ${lead.intentDetectado.urgencia})</div>`;
       }
       if(lead.erro) {
-         titleParams = \`<div class="kb-error">🚨 \${lead.erro}</div>\`;
+         titleParams = `<div class="kb-error">🚨 ${lead.erro}</div>`;
       }
 
-      card.innerHTML = \`
+      card.innerHTML = `
         <div class="kb-card-header">
-           <span class="kb-cnpj">\${lead.cnpj}</span>
-           <span class="kb-time">\${new Date(lead.respondidoEm || lead.enviadoEm || Date.now()).toLocaleDateString()}</span>
+           <span class="kb-cnpj">${lead.cnpj}</span>
+           <span class="kb-time">${new Date(lead.respondidoEm || lead.enviadoEm || Date.now()).toLocaleDateString()}</span>
         </div>
-        <div class="kb-title" title="\${lead.razao || 'Empresa desconhecida'}">\${lead.fantasia || lead.razao || 'Lead ' + lead.cnpj}</div>
-        <div class="kb-city">📍 \${lead.cidade || 'Local não informado'} | \${lead.segmentoPrioritario || 'Varejo'}</div>
-        <div class="kb-status-tag" style="\${lead.status === 'oportunidade' ? 'background:rgba(245,158,11,0.2);color:#f59e0b;' : ''}">\${lead.classificacao}</div>
-        \${titleParams}
-      \`;
+        <div class="kb-title" title="${lead.razao || 'Empresa desconhecida'}">${lead.fantasia || lead.razao || 'Lead ' + lead.cnpj}</div>
+        <div class="kb-city">📍 ${lead.cidade || 'Local não informado'} | ${lead.segmentoPrioritario || 'Varejo'}</div>
+        <div class="kb-status-tag" style="${lead.status === 'oportunidade' ? 'background:rgba(245,158,11,0.2);color:#f59e0b;' : ''}">${lead.classificacao}</div>
+        ${titleParams}
+      `;
 
       card.addEventListener('click', () => openHistoricoModal(lead.cnpj, lead.fantasia || lead.razao, lead.status));
       targetCol.appendChild(card);
@@ -690,7 +691,7 @@ async function openHistoricoModal(cnpj, nome, status) {
      modal = document.createElement('div');
      modal.id = 'hist-modal';
      modal.className = 'modal-overlay';
-     modal.innerHTML = \`
+     modal.innerHTML = `
        <div class="modal-content">
          <div class="modal-header">
             <h2 id="hist-title">Histórico: Empresa</h2>
@@ -698,7 +699,7 @@ async function openHistoricoModal(cnpj, nome, status) {
          </div>
          <div class="modal-body" id="hist-body">Carregando...</div>
        </div>
-     \`;
+     `;
      document.body.appendChild(modal);
      document.getElementById('btn-close-hist').addEventListener('click', () => modal.classList.remove('active'));
   }
@@ -714,12 +715,12 @@ async function openHistoricoModal(cnpj, nome, status) {
         return;
      }
 
-     document.getElementById('hist-body').innerHTML = hist.messages.map(m => \`
-       <div class="chat-bubble \${m.role}">
-         <div class="chat-role">\${m.role === 'model' ? '🤖 Gemini IA (Lourdes)' : '👤 Lead (\${nome})'}</div>
-         <div>\${m.text.replace(/\\n/g, '<br/>')}</div>
+     document.getElementById('hist-body').innerHTML = hist.messages.map(m => `
+       <div class="chat-bubble ${m.role}">
+         <div class="chat-role">${m.role === 'model' ? '🤖 Gemini IA (Lourdes)' : '👤 Lead (${nome})'}</div>
+         <div>${m.text.replace(/\n/g, '<br/>')}</div>
        </div>
-     \`).join('');
+     `).join('');
 
      // Scroll to bottom
      const body = document.getElementById('hist-body');
