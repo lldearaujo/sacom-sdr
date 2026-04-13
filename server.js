@@ -978,8 +978,9 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 
     let lead  = leads.find((l) => l.cnpj === cnpj);
 
-    // [MODO TESTE] Verifica se é um número autorizado em .env
-    const numerosAutorizados = (process.env.NUMEROS_TESTE || '').split(',').map(n => n.replace(/\D/g, '')).filter(n => n.length > 5);
+    // [MODO TESTE] Verifica se é um número autorizado em .env (suporta vírgula, ponto-e-vírgula e espaço)
+    const rawTeste = process.env.NUMEROS_TESTE || '';
+    const numerosAutorizados = rawTeste.split(/[,;\s]+/).map(n => n.replace(/\D/g, '')).filter(n => n.length > 5);
     const ehNumeroTeste = numerosAutorizados.some(nt => numero.includes(nt) || nt.includes(numero.substring(2)));
 
     if (!lead && ehNumeroTeste) {
@@ -995,7 +996,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     }
 
     if (!lead) {
-       console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado em nenhum arquivo de Leads.`);
+       console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado. (Valores Bypass em mem.: '${rawTeste}')`);
        return;
     }
 
