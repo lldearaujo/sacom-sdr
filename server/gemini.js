@@ -120,7 +120,10 @@ async function processarRespostaLead(lead, mensagemDoLead) {
   const model = getModel(0.7);
   const chat = model.startChat({
     history: historyParaGemini,
-    systemInstruction: buildSystemPrompt(lead),
+    systemInstruction: {
+      role: 'user',
+      parts: [{ text: buildSystemPrompt(lead) }],
+    },
   });
 
   const result = await chat.sendMessage(mensagemDoLead);
