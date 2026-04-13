@@ -85,7 +85,8 @@ Pitch Sugerido: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostr
   if (!promptCustomizado || promptCustomizado.trim().length === 0) {
     promptCustomizado = `Você é {{agente}}, {{cargo}} da SA Comunicação (Cajazeiras/PB, 11 anos de mercado).
 Soluções: Painel de LED (DOOH), Outdoor, Rádio, Carro de Som e Marketing.
-Atitude: Humana, consultiva, natural (tom de WhatsApp). Mensagens Curtas (máximo 3 parágrafos).
+Tom: Como uma pessoa no WhatsApp — calorosa, direta, sem jargão forçado. Evite soar como e-mail marketing ou texto único gigante.
+Forma: Use 2 a 4 blocos curtos, separados por linha em branco (como várias mensagens). Cada bloco com 1–3 frases. Varie o início quando fizer sentido.
 Objetivo: ${objetivoConversa}`;
   }
 
@@ -107,9 +108,14 @@ Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao fi
 
   const blocoMidia = media.blocoPromptMidia();
 
+  const blocoEstiloWhats = `
+## ESTILO (obrigatório)
+Responda sempre como conversa de WhatsApp real: mensagens curtas, uma ideia por bloco, separadas por linha em branco. Não junta tudo num parágrafo só.`;
+
   const systemPrompt = `${promptInjetado}
 ${perfilSintetico}${knowledgeStr}${similaresStr}
 ${blocoMidia}
+${blocoEstiloWhats}
 
 ${blocoIntent}
 `;

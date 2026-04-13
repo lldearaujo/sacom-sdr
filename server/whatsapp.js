@@ -58,6 +58,74 @@ async function enviarMensagem(numero, mensagem) {
   return res.json(); // { zaapId, messageId, id }
 }
 
+const MAX_CHUNK = parseInt(process.env.WHATSAPP_RESPOSTA_MAX_CHUNK || '380', 10);
+const DELAY_CHUNK_MIN = parseInt(process.env.WHATSAPP_RESPOSTA_DELAY_MIN_MS || '550', 10);
+const DELAY_CHUNK_MAX = parseInt(process.env.WHATSAPP_RESPOSTA_DELAY_MAX_MS || '1300', 10);
+
+/**
+ * Quebra texto em blocos curtos (parágrafos → frases) para parecer várias mensagens humanas.
+ */
+function quebrarTextoEmChunks(texto) {
+  const t = String(texto || '').trim();
+  if (!t) return [];
+
+  let blocos = t.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+  if (blocos.length === 0) blocos = [t];
+
+  const out = [];
+  for (const bloco of blocos) {
+    if (bloco.length <= MAX_CHUNK) {
+      out.push(bloco);
+      continue;
+    }
+    let resto = bloco;
+    while (resto.length > 0) {
+      if (resto.length <= MAX_CHUNK) {
+        out.push(resto.trim());
+        break;
+      }
+      let corte = resto.lastIndexOf('. ', MAX_CHUNK);
+      if (corte < Math.floor(MAX_CHUNK * 0.45)) corte = resto.lastIndexOf('! ', MAX_CHUNK);
+      if (corte < Math.floor(MAX_CHUNK * 0.45)) corte = resto.lastIndexOf('? ', MAX_CHUNK);
+      if (corte < Math.floor(MAX_CHUNK * 0.45)) corte = resto.lastIndexOf('\n', MAX_CHUNK);
+      if (corte < Math.floor(MAX_CHUNK * 0.45)) corte = resto.lastIndexOf(' ', MAX_CHUNK);
+      if (corte < 20) corte = MAX_CHUNK;
+      const pedaco = resto.slice(0, corte + 1).trim();
+      out.push(pedaco);
+      resto = resto.slice(corte + 1).trim();
+    }
+  }
+
+  const merged = [];
+  for (const c of out) {
+    if (!c) continue;
+    const prev = merged[merged.length - 1];
+    if (prev && prev.length + c.length + 2 <= MAX_CHUNK && prev.length < 90) {
+      merged[merged.length - 1] = `${prev}\n\n${c}`;
+    } else {
+      merged.push(c);
+    }
+  }
+  return merged.length ? merged : [t];
+}
+
+async function delayEntreChunks() {
+  const ms = DELAY_CHUNK_MIN + Math.random() * (DELAY_CHUNK_MAX - DELAY_CHUNK_MIN);
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Envia resposta em várias bolhas de chat com pausas aleatórias.
+ */
+async function enviarTextoFracionado(numero, texto) {
+  const chunks = quebrarTextoEmChunks(texto);
+  if (chunks.length === 0) return;
+  for (let i = 0; i < chunks.length; i++) {
+    await enviarMensagem(numero, chunks[i]);
+    if (i < chunks.length - 1) await delayEntreChunks();
+  }
+}
+
 async function zapiPost(suffixPath, body) {
   if (!process.env.ZAPI_INSTANCE_ID || !process.env.ZAPI_TOKEN) {
     throw new Error('Z-API não configurada. Preencha ZAPI_INSTANCE_ID e ZAPI_TOKEN no .env');
@@ -241,6 +309,8 @@ async function encontrarCnpjPorNumero(numero) {
 
 module.exports = {
   enviarMensagem,
+  enviarTextoFracionado,
+  quebrarTextoEmChunks,
   enviarMidia,
   enviarMidiasCatalogo,
   dispararLote,

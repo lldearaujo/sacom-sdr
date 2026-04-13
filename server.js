@@ -15,6 +15,7 @@ const cache = require('./server/cache');
 const gemini = require('./server/gemini');
 const whatsapp = require('./server/whatsapp');
 const whatsappInbound = require('./server/whatsapp-inbound');
+const whatsappDebounce = require('./server/whatsapp-debounce');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
@@ -269,28 +270,35 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
        return;
     }
 
-    console.log(`[Webhook] Processando mensagem para: ${lead.razao} (${cnpj})`);
+    console.log(`[Webhook] Mensagem recebida — debounce ${whatsappDebounce.DEBOUNCE_MS}ms: ${lead.razao} (${cnpj})`);
 
-    // 🤖 Gemini processa via engine RAG
-    const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(lead, userContent);
+    whatsappDebounce.scheduleBatchedReply(
+      numero,
+      { userContent, lead, cnpj },
+      async ({ merged, lead: leadCtx, cnpj: cnpjCtx, phone }) => {
+        const userInput =
+          merged.parts && merged.parts.length > 0 ? merged : merged.text;
 
-    // Salva intent se detectado
-    if (intent?.interesse) {
-      console.log(`🔥 OPORTUNIDADE: ${lead.razao} (${lead.cidade}) — ${intent.tipo}`);
-      await db.saveProspeccaoDB(cnpj, { status: intent.urgencia === 'alta' ? 'oportunidade' : 'respondido' });
-    }
+        console.log(`[Webhook] Processando lote agregado para: ${leadCtx.razao} (${cnpjCtx})`);
 
-    // Delay humanizado (2–4s)
-    await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
+        const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(leadCtx, userInput);
 
-    // Texto primeiro; mídias do catálogo em seguida (URLs públicas)
-    if (resposta && resposta.trim()) {
-      await whatsapp.enviarMensagem(numero, resposta);
-    }
-    if (mediaKeys.length) {
-      const rMidia = await whatsapp.enviarMidiasCatalogo(numero, mediaKeys);
-      if (rMidia.enviados) console.log(`[Webhook] Mídias enviadas: ${rMidia.enviados} (${mediaKeys.join(', ')})`);
-    }
+        if (intent?.interesse) {
+          console.log(`🔥 OPORTUNIDADE: ${leadCtx.razao} (${leadCtx.cidade}) — ${intent.tipo}`);
+          await db.saveProspeccaoDB(cnpjCtx, { status: intent.urgencia === 'alta' ? 'oportunidade' : 'respondido' });
+        }
+
+        await new Promise((r) => setTimeout(r, 800 + Math.random() * 1400));
+
+        if (resposta && resposta.trim()) {
+          await whatsapp.enviarTextoFracionado(phone, resposta);
+        }
+        if (mediaKeys.length) {
+          const rMidia = await whatsapp.enviarMidiasCatalogo(phone, mediaKeys);
+          if (rMidia.enviados) console.log(`[Webhook] Mídias enviadas: ${rMidia.enviados} (${mediaKeys.join(', ')})`);
+        }
+      }
+    );
 
   } catch (err) {
     console.error('Erro no webhook Gemini/Z-API:', err.message);
