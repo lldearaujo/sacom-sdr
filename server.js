@@ -1022,6 +1022,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n✅ SA Comunicação BDR Dashboard rodando em http://0.0.0.0:${PORT}`);
   console.log(`   🤖 Gemini AI: ${process.env.GEMINI_MODEL || 'gemini-2.0-flash'}`);
   console.log(`   📱 Z-API: ${process.env.ZAPI_INSTANCE_ID ? 'configurada' : 'não configurada (preencha .env)'}\n`);
-  // Pré-carrega os leads no início
-  getLeads();
+  // Pré-carrega os leads após 2 segundos para não travar o Healthcheck do Docker
+  setTimeout(() => {
+    getLeads();
+  }, 2000);
 });
