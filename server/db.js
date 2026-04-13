@@ -107,6 +107,17 @@ async function init() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS knowledge_base (
+        id            SERIAL PRIMARY KEY,
+        titulo        TEXT NOT NULL,
+        conteudo      TEXT NOT NULL,
+        embedding     vector(3072),
+        fonte_arquivo TEXT,
+        criado_em     TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // Índice vetorial — só criado se já houver linhas
     const { rows } = await client.query('SELECT COUNT(*) FROM leads WHERE embedding IS NOT NULL');
     if (parseInt(rows[0].count) >= 100) {
@@ -348,6 +359,46 @@ async function getProspeccao(cnpj) {
     'SELECT * FROM prospeccao WHERE cnpj = $1', [cnpj],
   );
   return rows[0] || null;
+}
+
+// ─── KNOWLEDGE BASE (RAG Treinamento) ──────────────────────────────────────────
+
+async function saveKnowledge(titulo, conteudo, embedding, fonteArquivo) {
+  const vectorStr = `[${embedding.join(',')}]`;
+  const { rows } = await pool.query(`
+    INSERT INTO knowledge_base (titulo, conteudo, embedding, fonte_arquivo)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id
+  `, [titulo, conteudo, vectorStr, fonteArquivo || null]);
+  return rows[0].id;
+}
+
+async function searchKnowledge(embedding, limit = 2) {
+  const vectorStr = `[${embedding.join(',')}]`;
+  const { rows } = await pool.query(`
+    SELECT id, titulo, conteudo, fonte_arquivo
+    FROM knowledge_base
+    ORDER BY embedding <=> $1
+    LIMIT $2
+  `, [vectorStr, limit]);
+  return rows;
+}
+
+async function getKnowledgeList() {
+  const { rows } = await pool.query(`
+    SELECT id, titulo, fonte_arquivo, criado_em, substring(conteudo from 1 for 100) || '...' as resumo
+    FROM knowledge_base
+    ORDER BY criado_em DESC
+  `);
+  return rows;
+}
+
+async function deleteKnowledge(id) {
+  await pool.query('DELETE FROM knowledge_base WHERE id = $1', [id]);
+}
+
+async function deleteKnowledgeByFonte(fonteArquivo) {
+  await pool.query('DELETE FROM knowledge_base WHERE fonte_arquivo = $1', [fonteArquivo]);
 }
 
 async function getAllProspeccoes() {
@@ -600,4 +651,10 @@ module.exports = {
   encontrarCnpjPorNumeroDB,
   // analytics
   getStats,
+  // knowledge base
+  saveKnowledge,
+  searchKnowledge,
+  getKnowledgeList,
+  deleteKnowledge,
+  deleteKnowledgeByFonte,
 };

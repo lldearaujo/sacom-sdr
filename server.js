@@ -4,6 +4,8 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
+const pdfParse = require('pdf-parse');
 
 // ─── Módulos de Banco, IA e WhatsApp ──────────────────────────────────────────
 const db = require('./server/db');
@@ -252,9 +254,13 @@ app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
 // ─── Settings API ──────────────────────────────────────────────────────────────
 
 app.get('/api/config', (req, res) => {
-  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
+  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
   const responseConfig = {};
-  keys.forEach(k => responseConfig[k] = process.env[k] || '');
+  keys.forEach(k => {
+    let val = process.env[k] || '';
+    if (k === 'BDR_SYSTEM_PROMPT') val = val.replace(/\\n/g, '\n');
+    responseConfig[k] = val;
+  });
   res.json(responseConfig);
 });
 
@@ -263,7 +269,11 @@ app.post('/api/config', (req, res) => {
     const envPath = path.join(__dirname, '.env');
     let lines = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n') : [];
     
-    for (const [key, value] of Object.entries(req.body || {})) {
+    for (const [key, rawValue] of Object.entries(req.body || {})) {
+      let value = rawValue;
+      if (key === 'BDR_SYSTEM_PROMPT') {
+        value = String(value).replace(/\r\n/g, '\n').replace(/\n/g, '\\n');
+      }
       process.env[key] = value;
       const idx = lines.findIndex(l => l.startsWith(`${key}=`));
       if (idx !== -1) lines[idx] = `${key}=${value}`;
@@ -271,6 +281,77 @@ app.post('/api/config', (req, res) => {
     }
 
     fs.writeFileSync(envPath, lines.join('\n').trim() + '\n', 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Knowledge Base Upload API ────────────────────────────────────────────────
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.get('/api/knowledge', async (req, res) => {
+  try {
+    const list = await db.getKnowledgeList();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/knowledge/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+  try {
+    const { originalname, buffer, mimetype } = req.file;
+    let textoDeExtraida = '';
+
+    if (mimetype === 'application/pdf') {
+      const parsed = await pdfParse(buffer);
+      textoDeExtraida = parsed.text;
+    } else {
+      textoDeExtraida = buffer.toString('utf8');
+    }
+
+    if (!textoDeExtraida || textoDeExtraida.trim().length === 0) {
+      return res.status(400).json({ error: 'O arquivo não contém texto legível.' });
+    }
+
+    // Fatia o documento em pedaços de ~1000 caracteres para melhor embedding semântico
+    const chunks = [];
+    const paragraphs = textoDeExtraida.split(/\n\s*\n/);
+    let currentChunk = '';
+    
+    for (const p of paragraphs) {
+      if (currentChunk.length + p.length > 2000) {
+        chunks.push(currentChunk.trim());
+        currentChunk = p;
+      } else {
+        currentChunk += '\\n\\n' + p;
+      }
+    }
+    if (currentChunk.trim()) chunks.push(currentChunk.trim());
+
+    // Importar rag localmente para não causar erro top-level se ainda n foi carregado
+    const rag = require('./server/rag');
+    
+    let inseridos = 0;
+    for (const chunk of chunks) {
+      if (chunk.length < 20) continue; // Pula fragmentos inúteis
+      const embedding = await rag.getEmbedding(chunk);
+      await db.saveKnowledge(`Fragmento de ${originalname}`, chunk, embedding, originalname);
+      inseridos++;
+    }
+
+    res.json({ ok: true, file: originalname, inseridos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/knowledge/:id', async (req, res) => {
+  try {
+    await db.deleteKnowledge(req.params.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

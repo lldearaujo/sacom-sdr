@@ -312,13 +312,20 @@
 
         <div class="chart-card config-section">
           <div class="chart-title">⚙️ Motor Gemini (IA)</div>
-          <div class="input-group">
-            <label>Modelo (Model)</label>
-            <input type="text" id="cfg-gemini-model" class="filter-input" placeholder="Ex: gemini-2.0-flash">
+          <div class="input-row">
+            <div class="input-group">
+              <label>Modelo (Model)</label>
+              <input type="text" id="cfg-gemini-model" class="filter-input" placeholder="Ex: gemini-2.0-flash">
+            </div>
+            <div class="input-group">
+              <label>Temperatura (Criatividade: 0.0 a 1.0)</label>
+              <input type="number" id="cfg-gemini-temp" class="filter-input" step="0.1" min="0" max="1" placeholder="Ex: 0.7">
+            </div>
           </div>
-          <div class="input-group">
-            <label>Temperatura (Criatividade: 0.0 a 1.0)</label>
-            <input type="number" id="cfg-gemini-temp" class="filter-input" step="0.1" min="0" max="1" placeholder="Ex: 0.7">
+          <div class="input-group" style="margin-top: 12px;">
+            <label>Comportamento Base (System Prompt)</label>
+            <textarea id="cfg-system-prompt" class="filter-input" rows="8" placeholder="Ex: Você é {{agente}}, {{cargo}}..." style="resize: vertical; font-family: monospace; font-size: 13px;"></textarea>
+            <small style="color: var(--text-muted); display: block; margin-top: 4px;">As variáveis {{agente}} e {{cargo}} serão substituídas dinamicamente.</small>
           </div>
         </div>
 
@@ -353,6 +360,26 @@
         <div class="input-group">
           <label>Telefones Autorizados (Separados por vírgula)</label>
           <input type="text" id="cfg-numeros-teste" class="filter-input" placeholder="Ex: 8394068978, 11999999999">
+        </div>
+      </div>
+
+      <div class="section-header" style="margin-top: 32px;">📚 Base de Conhecimento (RAG)</div>
+      
+      <div class="config-grid">
+        <div class="chart-card config-section" style="border: 2px dashed var(--border-color); text-align: center; padding: 32px;">
+          <div style="font-size: 32px; margin-bottom: 12px;">📄</div>
+          <h3 style="margin-bottom: 8px; color: var(--text-light);">Adicionar Material de Treinamento</h3>
+          <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">Faça upload de PDFs ou TXTs (ex: Tabelas de Preços, Portfólio, Manuais do BDR). A IA aprenderá esse conteúdo imediatamente.</p>
+          <input type="file" id="knowledge-file" accept=".pdf,.txt,.csv" style="display: none;" />
+          <button class="btn btn-primary" onclick="document.getElementById('knowledge-file').click()">Selecionar Arquivo</button>
+          <div id="upload-status" style="margin-top: 12px; font-weight: 500; font-size: 14px;"></div>
+        </div>
+
+        <div class="chart-card config-section">
+          <div class="chart-title">Documentos Treinados</div>
+          <div id="knowledge-list" style="max-height: 250px; overflow-y: auto;">
+             <p style="color: var(--text-muted); font-size: 13px;">Carregando...</p>
+          </div>
         </div>
       </div>
     </div>

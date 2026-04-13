@@ -28,47 +28,69 @@ async function getEmbedding(text) {
 async function buildContextoRAG(lead, mensagemCliente) {
   // 1. Gera embedding da mensagem do cliente para entender a intenção/contexto
   let similaresStr = '';
+  let knowledgeStr = '';
   try {
     const embeddingMensagem = await getEmbedding(mensagemCliente);
     
     // 2. Busca leads similares (para o agente usar como cases/referência implicitamente)
-    // Excluímos o CNPJ atual para não pegar ele mesmo
     const similares = await db.findSimilarLeads(embeddingMensagem, {
       limit: RAG_LEADS_SIMILARES,
       excludeCnpj: lead.cnpj
     });
 
     if (similares.length > 0) {
-      similaresStr = '\n\n## REFERÊNCIA (Para usar como cases/prova social se necessário):\n' + 
-        similares.map(s => `- Cliente de perfil similar na base: ${s.razao} (${s.cidade}). Eles também têm dor '${s.dor_principal}'.`).join('\n');
+      similaresStr = '\n\n## REFERÊNCIA (Cases):\n' + 
+        similares.map(s => `- Cliente similar: ${s.razao}. Dor: '${s.dor_principal}'.`).join('\n');
     }
+
+    // 2.5 Busca fragmentos do Treinamento (Knowledge Base)
+    const conhecimentosBase = await db.searchKnowledge(embeddingMensagem, 3);
+    if (conhecimentosBase.length > 0) {
+      knowledgeStr = '\n\n## CONHECIMENTO BASE (Tabela de preços, portfólio, manuais institucionais):\n' +
+        conhecimentosBase.map(k => `- [${k.titulo}]: ${k.conteudo}`).join('\n\n');
+    }
+
   } catch (e) {
     console.warn('Falha ao buscar contexto semântico (RAG fallback):', e.message);
   }
 
   // 3. Monta o Perfil Sintético do Lead Atual (Economiza tokens do System Prompt)
   const perfilSintetico = `
-## SOBRE O LEAD
+## SOBRE O LEAD ATUAL
 Empresa: ${lead.fantasia || lead.razao} (${lead.cidade})
 Segmento: ${lead.cnae || 'Variado'}
-Classificação: ${lead.classificacao}
-Dor Principal Detectada: ${lead.dor_principal || lead.dorPrincipal || 'Atrair clientes'}
+Dor Principal: ${lead.dor_principal || lead.dorPrincipal || 'Atrair clientes'}
 Oferta Recomendada: ${lead.oferta_principal || lead.ofertaPrincipal || 'OOH Geral'}
-Seu Pitch Consultivo: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local'}"
+Pitch Sugerido: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local'}"
 `;
 
-  // 4. Combina com o Base System Prompt
+  // 4. Combina com o Base System Prompt Configurável
   const agente = process.env.BDR_AGENTE_NOME || 'Lourdes';
   const cargo  = process.env.BDR_AGENTE_CARGO || 'Consultora de Mídia';
 
-  const systemPrompt = `Você é ${agente}, ${cargo} da SA Comunicação (Cajazeiras/PB, 11 anos de mercado).
-Soluções exclusivas: Painel de LED (DOOH), Outdoor, Rádio Centro, Carro de Som e Marketing Digital.
+  // Se o Prompt não foi configurado na UI ainda, usamos o padrão!
+  let promptCustomizado = process.env.BDR_SYSTEM_PROMPT;
+  if (!promptCustomizado || promptCustomizado.trim().length === 0) {
+    promptCustomizado = `Você é {{agente}}, {{cargo}} da SA Comunicação (Cajazeiras/PB, 11 anos de mercado).
+Soluções: Painel de LED (DOOH), Outdoor, Rádio, Carro de Som e Marketing.
 Atitude: Humana, consultiva, natural (tom de WhatsApp). Mensagens Curtas (máximo 3 parágrafos).
-Objetivo: Agendar apresentação/reunião.
-${perfilSintetico}${similaresStr}
+Objetivo: Agendar apresentação/reunião.`;
+  }
+
+  // Substitui tags
+  let promptInjetado = promptCustomizado
+    .replace(/\{\{agente\}\}/g, agente)
+    .replace(/\{\{cargo\}\}/g, cargo);
+  // Compatibilidade caso usem ${agente} no text area:
+  promptInjetado = promptInjetado
+    .replace(/\$\{agente\}/g, agente)
+    .replace(/\$\{cargo\}/g, cargo);
+
+  const systemPrompt = `${promptInjetado}
+${perfilSintetico}${knowledgeStr}${similaresStr}
 
 ## DETECÇÃO DE INTENÇÃO (OCULTA)
-Se o lead demonstrar interesse real (querer proposta, agendar), adicione APENAS ao final da sua resposta, em linha invisível:
+Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao final da sua resposta:
 <intent>{"interesse": true, "tipo": "agendamento|proposta", "urgencia": "alta|media|baixa"}</intent>
 `;
 

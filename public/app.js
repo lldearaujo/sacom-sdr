@@ -746,6 +746,7 @@ async function initConfigView() {
     const config = await fetchJson('/api/config');
     document.getElementById('cfg-agente-nome').value = config.BDR_AGENTE_NOME || '';
     document.getElementById('cfg-agente-cargo').value = config.BDR_AGENTE_CARGO || '';
+    document.getElementById('cfg-system-prompt').value = config.BDR_SYSTEM_PROMPT || '';
     document.getElementById('cfg-gemini-model').value = config.GEMINI_MODEL || '';
     document.getElementById('cfg-gemini-temp').value = config.GEMINI_TEMPERATURA || '';
     document.getElementById('cfg-hora-inicio').value = config.PROSPECCAO_HORA_INICIO || '';
@@ -770,6 +771,7 @@ async function initConfigView() {
     const updates = {
       BDR_AGENTE_NOME: document.getElementById('cfg-agente-nome').value,
       BDR_AGENTE_CARGO: document.getElementById('cfg-agente-cargo').value,
+      BDR_SYSTEM_PROMPT: document.getElementById('cfg-system-prompt').value,
       GEMINI_MODEL: document.getElementById('cfg-gemini-model').value,
       GEMINI_TEMPERATURA: document.getElementById('cfg-gemini-temp').value,
       PROSPECCAO_HORA_INICIO: document.getElementById('cfg-hora-inicio').value,
@@ -798,4 +800,73 @@ async function initConfigView() {
       btnSalvar.textContent = '💾 Salvar Configurações';
     }
   });
+
+  // Base de Conhecimento
+  const uploadInput = document.getElementById('knowledge-file');
+  const uploadStatus = document.getElementById('upload-status');
+  
+  uploadInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    uploadStatus.style.color = 'var(--text-light)';
+    uploadStatus.textContent = '⏱️ Carregando e processando semântica do arquivo. Pode levar alguns minutos...';
+
+    try {
+      const res = await fetch('/api/knowledge/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro no upload');
+      
+      uploadStatus.style.color = '#34d399';
+      uploadStatus.textContent = `✅ Sucesso! O bot memorizou ${data.inseridos} blocos lógicos desse arquivo.`;
+      loadKnowledgeBase();
+    } catch(err) {
+      uploadStatus.style.color = '#f87171';
+      uploadStatus.textContent = `❌ Falha: ${err.message}`;
+    } finally {
+      uploadInput.value = '';
+    }
+  });
+
+  loadKnowledgeBase();
+}
+
+async function loadKnowledgeBase() {
+  const container = document.getElementById('knowledge-list');
+  try {
+    const res = await fetchJson('/api/knowledge');
+    if (!res || res.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">Nenhum documento treinado.</p>';
+      return;
+    }
+    
+    container.innerHTML = res.map(doc => `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); padding: 12px 0;">
+        <div>
+          <div style="font-weight:600; color:var(--text-light); font-size:14px;">${doc.fonte_arquivo || doc.titulo}</div>
+          <div style="font-size:12px; color:var(--text-muted); line-height:1.4; margin-top:4px;">${doc.resumo}</div>
+        </div>
+        <button class="btn btn-close" style="color:#ef4444;" onclick="deleteKnowledge(${doc.id})">🗑️</button>
+      </div>
+    `).join('');
+  } catch(err) {
+    container.innerHTML = '<p style="color:#ef4444; font-size: 13px;">Erro ao carregar lista.</p>';
+  }
+}
+
+async function deleteKnowledge(id) {
+  if (!confirm('Deseja realmente remover este bloco da memória da IA?')) return;
+  try {
+    const res = await fetch('/api/knowledge/' + id, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Erro ao deletar');
+    loadKnowledgeBase();
+  } catch(err) {
+    alert(err.message);
+  }
 }
