@@ -1,35 +1,15 @@
 'use strict';
 
-const fs   = require('fs');
-const path = require('path');
-
-const CACHE_DIR        = path.join(__dirname, '..', '.cache');
-const PROSPECCAO_FILE  = path.join(CACHE_DIR, 'prospeccao.json');
+const db = require('./db');
+const cache = require('./cache'); // Usaremos para locks
 
 const ZAPI_BASE = () =>
   `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
 
-// ─── Cache de prospecção ──────────────────────────────────────────────────────
-function loadProspeccao() {
-  try {
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-    if (!fs.existsSync(PROSPECCAO_FILE)) return {};
-    return JSON.parse(fs.readFileSync(PROSPECCAO_FILE, 'utf-8'));
-  } catch { return {}; }
-}
-
-function saveProspeccao(data) {
-  try {
-    fs.writeFileSync(PROSPECCAO_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Falha ao salvar cache de prospecção:', err.message);
-  }
-}
-
 // ─── Formata número BR para padrão Z-API (5583999999999) ─────────────────────
 function formatarNumero(telefone) {
   if (!telefone) return null;
-  const digits = telefone.replace(/\D/g, '');
+  const digits = telefone.replace(/\\D/g, '');
   if (!digits) return null;
   const comDDI = digits.startsWith('55') ? digits : `55${digits}`;
   // Celular: 13 dígitos | Fixo: 12 dígitos
@@ -40,19 +20,11 @@ function formatarNumero(telefone) {
 // ─── Verifica horário comercial (Seg–Sex, 8h–18h) ────────────────────────────
 function isHorarioComercial() {
   const hora     = new Date().getHours();
+  // Timezone adjustment se necessário (assumindo servidor em local time ou ajustado)
   const diaSemana = new Date().getDay(); // 0=Dom … 6=Sáb
   const inicio   = parseInt(process.env.PROSPECCAO_HORA_INICIO || '8', 10);
   const fim      = parseInt(process.env.PROSPECCAO_HORA_FIM    || '18', 10);
   return hora >= inicio && hora < fim && diaSemana >= 1 && diaSemana <= 5;
-}
-
-// ─── Verifica cooldown de um lead ────────────────────────────────────────────
-function emCooldown(cnpj, cache) {
-  const entry = cache[cnpj];
-  if (!entry?.enviadoEm) return false;
-  const diasPassados = (Date.now() - Date.parse(entry.enviadoEm)) / (1000 * 60 * 60 * 24);
-  const cooldown = parseInt(process.env.PROSPECCAO_COOLDOWN_DIAS || '30', 10);
-  return diasPassados < cooldown;
 }
 
 // ─── Delay aleatório (anti-ban) ───────────────────────────────────────────────
@@ -86,17 +58,13 @@ async function enviarMensagem(numero, mensagem) {
 }
 
 // ─── Disparo de lote de leads ─────────────────────────────────────────────────
-// gerarMensagemFn: função async (lead) => string — pode ser Gemini ou template fixo
 async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
   if (!isHorarioComercial()) {
     return { ignorado: true, motivo: 'Fora do horário comercial (Seg–Sex 8h–18h)' };
   }
 
-  const cache = loadProspeccao();
   const limiteDiario = parseInt(process.env.PROSPECCAO_LIMITE_DIARIO || '40', 10);
-
-  const hoje = new Date().toISOString().slice(0, 10);
-  const enviosHoje = Object.values(cache).filter(e => e.enviadoEm?.startsWith(hoje)).length;
+  const enviosHoje = await db.getLeadsProspectadosHoje();
 
   if (enviosHoje >= limiteDiario) {
     return { ignorado: true, motivo: `Limite diário de ${limiteDiario} mensagens atingido` };
@@ -115,8 +83,16 @@ async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
       continue;
     }
 
-    if (emCooldown(lead.cnpj, cache)) {
+    // Verifica cooldown no DB
+    if (await db.emCooldownDB(lead.cnpj)) {
       resultados.push({ cnpj: lead.cnpj, status: 'ignorado', motivo: 'Em cooldown' });
+      continue;
+    }
+
+    // Lock no Redis para evitar envio duplicado em requisições paralelas
+    const gotLock = await cache.acquireLock(`prosp:${lead.cnpj}`, 30);
+    if (!gotLock) {
+      resultados.push({ cnpj: lead.cnpj, status: 'ignorado', motivo: 'Lock de disparo ativo' });
       continue;
     }
 
@@ -124,39 +100,45 @@ async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
     try {
       mensagem = gerarMensagemFn
         ? await gerarMensagemFn(lead)
-        : templatePadrão(lead);
+        : templatePadrao(lead);
     } catch (err) {
       console.warn(`Erro ao gerar mensagem para ${lead.cnpj}:`, err.message);
-      mensagem = templatePadrão(lead);
+      mensagem = templatePadrao(lead);
     }
+
+    // Pega os dados anteriores de prospecção do DB pra atualizar tentativas
+    const prospData = await db.getProspeccao(lead.cnpj) || { tentativas: 0 };
 
     try {
       const resposta = await enviarMensagem(numero, mensagem);
-      cache[lead.cnpj] = {
-        status:     'enviado',
-        enviadoEm:  new Date().toISOString(),
-        zaapId:     resposta.zaapId,
-        messageId:  resposta.messageId,
+      
+      await db.saveProspeccaoDB(lead.cnpj, {
+        status: 'enviado',
+        enviadoEm: new Date().toISOString(),
+        zaapId: resposta.zaapId,
+        messageId: resposta.messageId,
         mensagem,
         numero,
-        respondidoEm: null,
-        notas:      '',
-        tentativas: (cache[lead.cnpj]?.tentativas || 0) + 1,
-      };
-      saveProspeccao(cache);
+        tentativas: prospData.tentativas + 1,
+      });
+
+      // Se for a primeira vez que entra em contato, já jogamos o bot no contexto (simula que o bot mandou pra começar a conversa)
+      await db.saveConversa(lead.cnpj, 'model', mensagem);
+      await cache.appendMensagemConversa(lead.cnpj, 'model', mensagem);
+
       resultados.push({ cnpj: lead.cnpj, status: 'enviado', messageId: resposta.messageId });
       contador++;
 
       // Delay anti-ban antes do próximo envio
       if (contador < maxEnvios) await delayAleatorio();
     } catch (err) {
-      cache[lead.cnpj] = {
-        ...(cache[lead.cnpj] || {}),
-        status:    'erro',
-        erro:      err.message,
+      await db.saveProspeccaoDB(lead.cnpj, {
+        status: 'erro',
         enviadoEm: new Date().toISOString(),
-      };
-      saveProspeccao(cache);
+        mensagem,
+        numero,
+        tentativas: prospData.tentativas + 1,
+      });
       resultados.push({ cnpj: lead.cnpj, status: 'erro', motivo: err.message });
     }
   }
@@ -165,32 +147,26 @@ async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
 }
 
 // ─── Template padrão (fallback quando Gemini falha) ──────────────────────────
-function templatePadrão(lead) {
+function templatePadrao(lead) {
   const agente  = process.env.BDR_AGENTE_NOME || 'Lourdes';
   const empresa = lead.fantasia || lead.razao || 'sua empresa';
   return `Olá! 👋 Aqui é o/a *${agente}*, da *SA Comunicação* de Cajazeiras.
 
-Vi que a *${empresa}* atua em ${lead.cidade} — ${lead.discursoConsultivo || 'e temos uma solução de mídia local que pode ajudar muito o seu negócio'}.
+Vi que a *${empresa}* atua em ${lead.cidade || 'nossa região'} — ${lead.discurso_consultivo || lead.discursoConsultivo || 'e temos uma solução de mídia local que pode ajudar muito o seu negócio'}.
 
 Posso te apresentar uma proposta rápida? 🚀`;
 }
 
 // ─── Processa webhook Z-API (resposta recebida) ───────────────────────────────
-function encontrarCnpjPorNumero(numero, cache) {
-  const numLimpo = numero.replace(/\D/g, '');
-  return Object.keys(cache).find(cnpj => {
-    const numCache = (cache[cnpj].numero || '').replace(/\D/g, '');
-    return numCache === numLimpo;
-  });
+async function encontrarCnpjPorNumero(numero) {
+  return await db.encontrarCnpjPorNumeroDB(numero);
 }
 
 module.exports = {
-  loadProspeccao,
-  saveProspeccao,
   enviarMensagem,
   dispararLote,
   formatarNumero,
   encontrarCnpjPorNumero,
   isHorarioComercial,
-  templatePadrão,
+  templatePadrao,
 };
