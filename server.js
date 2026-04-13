@@ -952,6 +952,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 
   try {
     const payload = req.body;
+    console.log('\n[Webhook Z-API Recebido]', JSON.stringify({ phone: payload?.phone, fromMe: payload?.fromMe, type: payload?.type, msg: payload?.text?.message }));
 
     // Ignora mensagens enviadas pelo próprio número ou sem texto
     if (!payload?.text?.message || payload.fromMe) return;
@@ -960,12 +961,30 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     const mensagem = payload.text.message;
 
     const cache = whatsapp.loadProspeccao();
-    const cnpj  = whatsapp.encontrarCnpjPorNumero(numero, cache);
-    if (!cnpj) return;
+    let cnpj  = whatsapp.encontrarCnpjPorNumero(numero, cache);
 
     const leads = await getLeads();
+
+    // Se o número testado/cliente ainda não estiver na memória de prospecção, procura direto na base completa de CSVs.
+    if (!cnpj) {
+      const match = leads.find(l => {
+        const t1 = (l.telefone1 || '').replace(/\D/g, '');
+        const t2 = (l.telefone2 || '').replace(/\D/g, '');
+        return (t1 && t1.length >= 8 && numero.includes(t1)) || 
+               (t2 && t2.length >= 8 && numero.includes(t2));
+      });
+      if (match) cnpj = match.cnpj;
+    }
+
+    if (!cnpj) {
+       console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado em nenhum arquivo de Leads.`);
+       return;
+    }
+
     const lead  = leads.find((l) => l.cnpj === cnpj);
     if (!lead) return;
+
+    console.log(`[Webhook] Processando mensagem para o Lead: ${lead.razao} (${cnpj})`);
 
     // 🤖 Gemini processa e gera resposta consultiva
     const { resposta, intent } = await gemini.processarRespostaLead(lead, mensagem);
