@@ -291,12 +291,14 @@ app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
 
 // ─── Settings API ──────────────────────────────────────────────────────────────
 
+const MULTILINE_CONFIG_KEYS = new Set(['BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO']);
+
 app.get('/api/config', (req, res) => {
-  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
+  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
   const responseConfig = {};
   keys.forEach(k => {
     let val = process.env[k] || '';
-    if (k === 'BDR_SYSTEM_PROMPT') val = val.replace(/\\n/g, '\n');
+    if (MULTILINE_CONFIG_KEYS.has(k)) val = val.replace(/\\n/g, '\n');
     responseConfig[k] = val;
   });
   res.json(responseConfig);
@@ -312,7 +314,7 @@ app.post('/api/config', (req, res) => {
 
     for (const [key, rawValue] of Object.entries(updates || {})) {
       let value = rawValue;
-      if (key === 'BDR_SYSTEM_PROMPT') {
+      if (MULTILINE_CONFIG_KEYS.has(key)) {
         value = String(value).replace(/\r\n/g, '\n').replace(/\n/g, '\\n');
       }
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {

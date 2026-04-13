@@ -332,6 +332,22 @@
           </div>
         </div>
 
+        <div class="chart-card config-section" style="grid-column: 1 / -1;">
+          <div class="chart-title">🎯 Objetivo comercial (configurável)</div>
+          <p class="subtitle" style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+            <strong>Objetivo da conversa</strong> entra na linha “Objetivo:” do <em>template padrão</em>, usado quando o campo <strong>Comportamento Base</strong> acima estiver vazio. Para controlar tudo manualmente, preencha o System Prompt e ignore este campo.
+          </p>
+          <div class="input-group">
+            <label>Objetivo (BDR_OBJETIVO_CONVERSA)</label>
+            <textarea id="cfg-objetivo-conversa" class="filter-input" rows="3" placeholder="Ex.: Esclarecer dúvidas com leveza; sugerir call só se o lead pedir proposta ou horário." style="resize: vertical; font-size: 13px;"></textarea>
+          </div>
+          <div class="input-group" style="margin-top: 14px;">
+            <label>Detecção de intenção — opcional (BDR_INTENT_DETECCAO)</label>
+            <textarea id="cfg-intent-deteccao" class="filter-input" rows="5" placeholder="Deixe vazio para o padrão (tags &lt;intent&gt;). Personalize quando e como marcar interesse (ex.: só após pedido explícito de proposta)." style="resize: vertical; font-family: monospace; font-size: 12px;"></textarea>
+            <small style="color: var(--text-muted); display: block; margin-top: 4px;">Texto anexado ao contexto RAG. Vazio = regras padrão com tag &lt;intent&gt;.</small>
+          </div>
+        </div>
+
         <div class="chart-card config-section">
           <div class="chart-title">⏱️ Regras de Prospecção</div>
           <div class="input-row">

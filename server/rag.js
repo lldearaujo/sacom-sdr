@@ -12,6 +12,12 @@ const cache = require('./cache');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+function readEnvMultiline(key) {
+  const v = process.env[key];
+  if (v == null || v === '') return '';
+  return String(v).replace(/\\n/g, '\n');
+}
+
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
 const RAG_HISTORICO_LIMITE = parseInt(process.env.RAG_HISTORICO_LIMITE || '5', 10);
 const RAG_LEADS_SIMILARES = parseInt(process.env.RAG_LEADS_SIMILARES || '2', 10);
@@ -68,13 +74,17 @@ Pitch Sugerido: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostr
   const agente = process.env.BDR_AGENTE_NOME || 'Lourdes';
   const cargo  = process.env.BDR_AGENTE_CARGO || 'Consultora de Mídia';
 
+  const objetivoConversa =
+    readEnvMultiline('BDR_OBJETIVO_CONVERSA').trim() ||
+    'Agendar apresentação/reunião.';
+
   // Se o Prompt não foi configurado na UI ainda, usamos o padrão!
   let promptCustomizado = process.env.BDR_SYSTEM_PROMPT;
   if (!promptCustomizado || promptCustomizado.trim().length === 0) {
     promptCustomizado = `Você é {{agente}}, {{cargo}} da SA Comunicação (Cajazeiras/PB, 11 anos de mercado).
 Soluções: Painel de LED (DOOH), Outdoor, Rádio, Carro de Som e Marketing.
 Atitude: Humana, consultiva, natural (tom de WhatsApp). Mensagens Curtas (máximo 3 parágrafos).
-Objetivo: Agendar apresentação/reunião.`;
+Objetivo: ${objetivoConversa}`;
   }
 
   // Substitui tags
@@ -86,12 +96,17 @@ Objetivo: Agendar apresentação/reunião.`;
     .replace(/\$\{agente\}/g, agente)
     .replace(/\$\{cargo\}/g, cargo);
 
+  const intentPadrao = `## DETECÇÃO DE INTENÇÃO (OCULTA)
+Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao final da sua resposta:
+<intent>{"interesse": true, "tipo": "agendamento|proposta", "urgencia": "alta|media|baixa"}</intent>`;
+
+  const intentCustom = readEnvMultiline('BDR_INTENT_DETECCAO').trim();
+  const blocoIntent = intentCustom.length > 0 ? intentCustom : intentPadrao;
+
   const systemPrompt = `${promptInjetado}
 ${perfilSintetico}${knowledgeStr}${similaresStr}
 
-## DETECÇÃO DE INTENÇÃO (OCULTA)
-Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao final da sua resposta:
-<intent>{"interesse": true, "tipo": "agendamento|proposta", "urgencia": "alta|media|baixa"}</intent>
+${blocoIntent}
 `;
 
   return systemPrompt;
