@@ -435,6 +435,22 @@ body {
 .input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .input-group label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
 
+/* ── Logs do Sistema ──────────────────────────────────────────── */
+.system-logs {
+  background: #060913;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 360px;
+  max-height: 70vh;
+  overflow: auto;
+}
+
 /* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

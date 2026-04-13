@@ -69,6 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (view === 'segmentos') initSegmentosView();
       if (view === 'prospeccao') initProspeccaoView();
       if (view === 'config') initConfigView();
+      if (view === 'logs') initLogsView();
     });
   });
 
@@ -77,6 +78,39 @@ document.addEventListener('DOMContentLoaded', () => {
     showApiError('Nao foi possivel carregar os dados. Verifique se o servidor esta em execucao.');
   });
 });
+
+/* ─── Logs View ───────────────────────────────────────────────── */
+let logsViewInitialized = false;
+let logsTimer = null;
+
+function initLogsView() {
+  if (logsViewInitialized) {
+    loadSystemLogs();
+    return;
+  }
+  logsViewInitialized = true;
+
+  const btn = document.getElementById('btn-refresh-logs');
+  if (btn) btn.addEventListener('click', () => loadSystemLogs());
+
+  loadSystemLogs();
+  logsTimer = setInterval(loadSystemLogs, 2500);
+}
+
+async function loadSystemLogs() {
+  const pre = document.getElementById('system-logs');
+  if (!pre) return;
+  try {
+    const data = await fetchJson('/api/system/logs?limit=250');
+    const lines = (data.logs || []).map((e) => {
+      const lvl = (e.level || 'log').toUpperCase().padEnd(5, ' ');
+      return `${e.ts} ${lvl} ${e.message}`;
+    });
+    pre.textContent = lines.length ? lines.join('\n') : 'Sem logs ainda. Gere algum evento (abrir telas, chamar APIs, disparar prospecção) e atualize.';
+  } catch (err) {
+    pre.textContent = 'Falha ao carregar logs: ' + (err.message || String(err));
+  }
+}
 
 /* ─── Stats ─────────────────────────────────────────────────── */
 async function loadStats() {
@@ -788,7 +822,7 @@ async function initConfigView() {
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates })
+        body: JSON.stringify(updates)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro ao salvar');

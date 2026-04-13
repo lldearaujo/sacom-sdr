@@ -7,6 +7,8 @@ const path = require('path');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 
+const systemLogger = require('./server/logger');
+
 // ─── Módulos de Banco, IA e WhatsApp ──────────────────────────────────────────
 const db = require('./server/db');
 const cache = require('./server/cache');
@@ -15,6 +17,10 @@ const whatsapp = require('./server/whatsapp');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
+
+systemLogger.installConsoleCapture();
+
+let dbReady = false;
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -28,18 +34,38 @@ const ENRICHMENT_FETCH_TIMEOUT_MS = Number.parseInt(process.env.ENRICHMENT_FETCH
 
 // ─── APIs Core ────────────────────────────────────────────────────────────────
 
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    const status = res.statusCode;
+    if (req.path.startsWith('/api/')) {
+      console.log(`[API] ${req.method} ${req.path} -> ${status} (${ms}ms)`);
+    }
+  });
+  next();
+});
+
 app.get('/api/health', async (req, res) => {
   const isRedisOk = await cache.isRedisHealthy();
   res.json({
     status: 'ok',
     uptimeSeconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
-    dbConectado: true,
+    dbConectado: dbReady,
     redisConectado: isRedisOk,
   });
 });
 
+app.get('/api/system/logs', (req, res) => {
+  const limit = req.query.limit || '200';
+  const level = req.query.level || '';
+  const logs = systemLogger.getLogs({ limit, level: level ? String(level) : undefined });
+  res.json({ logs });
+});
+
 app.get('/api/leads', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const result = await db.queryLeads(req.query);
     
@@ -67,6 +93,7 @@ app.get('/api/leads', async (req, res) => {
 });
 
 app.get('/api/stats', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const stats = await db.getStats();
     res.json(stats);
@@ -79,6 +106,7 @@ app.get('/api/stats', async (req, res) => {
 // Em uma refatoração total, o ideal seria mover a lógica de fetch pra um worker, 
 // mas para manter a API intacta pro frontend:
 app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const lead = await db.getLeadByCnpj(req.params.cnpj);
     if (!lead) return res.status(404).json({ error: 'Lead nao encontrado' });
@@ -104,6 +132,7 @@ app.get('/api/enrichment/warmup', (req, res) => {
 // ─── APIs Prospecção ─────────────────────────────────────────────────────────
 
 app.post('/api/prospeccao/disparar', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const {
       classificacoes = ['🔴 HOT', '🟠 WARM'],
@@ -126,6 +155,7 @@ app.post('/api/prospeccao/disparar', async (req, res) => {
 });
 
 app.get('/api/prospeccao/status', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const entries = await db.getAllProspeccoes();
     const stats = {
@@ -142,6 +172,7 @@ app.get('/api/prospeccao/status', async (req, res) => {
 });
 
 app.put('/api/prospeccao/:cnpj/status', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const { cnpj } = req.params;
     const { status, notas } = req.body || {};
@@ -154,6 +185,7 @@ app.put('/api/prospeccao/:cnpj/status', async (req, res) => {
 });
 
 app.get('/api/prospeccao/:cnpj/historico', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const hist = await db.getHistoricoConversa(req.params.cnpj);
     res.json({ messages: hist || [] }); // Frontend espera data.messages
@@ -167,6 +199,10 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
   res.json({ ok: true });
 
   try {
+    if (!dbReady) {
+      console.warn('[Webhook] Banco indisponível: ignorando processamento.');
+      return;
+    }
     const payload = req.body;
     console.log('\n[Webhook Z-API Recebido]', JSON.stringify({ phone: payload?.phone, fromMe: payload?.fromMe, type: payload?.type, msg: payload?.text?.message }));
 
@@ -228,6 +264,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 // ─── APIs AI & Insights ────────────────────────────────────────────────────────
 
 app.get('/api/ai/insights', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const leadsRaw = await db.queryLeads({ limit: 100 }); 
     const insights = await gemini.analisarLeadsComIA(leadsRaw.data);
@@ -238,6 +275,7 @@ app.get('/api/ai/insights', async (req, res) => {
 });
 
 app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const lead = await db.getLeadByCnpj(req.params.cnpj);
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
@@ -269,10 +307,16 @@ app.post('/api/config', (req, res) => {
     const envPath = path.join(__dirname, '.env');
     let lines = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n') : [];
     
-    for (const [key, rawValue] of Object.entries(req.body || {})) {
+    const payload = req.body || {};
+    const updates = payload.updates && typeof payload.updates === 'object' ? payload.updates : payload;
+
+    for (const [key, rawValue] of Object.entries(updates || {})) {
       let value = rawValue;
       if (key === 'BDR_SYSTEM_PROMPT') {
         value = String(value).replace(/\r\n/g, '\n').replace(/\n/g, '\\n');
+      }
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+        value = String(value);
       }
       process.env[key] = value;
       const idx = lines.findIndex(l => l.startsWith(`${key}=`));
@@ -292,6 +336,7 @@ app.post('/api/config', (req, res) => {
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.get('/api/knowledge', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const list = await db.getKnowledgeList();
     res.json(list);
@@ -303,6 +348,7 @@ app.get('/api/knowledge', async (req, res) => {
 app.post('/api/knowledge/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
   try {
+    if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
     const { originalname, buffer, mimetype } = req.file;
     let textoDeExtraida = '';
 
@@ -351,6 +397,7 @@ app.post('/api/knowledge/upload', upload.single('file'), async (req, res) => {
 
 app.delete('/api/knowledge/:id', async (req, res) => {
   try {
+    if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
     await db.deleteKnowledge(req.params.id);
     res.json({ ok: true });
   } catch (err) {
@@ -363,7 +410,14 @@ app.delete('/api/knowledge/:id', async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function startServer() {
-  await db.init();
+  try {
+    await db.init();
+    dbReady = true;
+  } catch (err) {
+    dbReady = false;
+    console.error('⚠️ Banco indisponível. Subindo API em modo degradado.', err.message);
+    console.error('   Verifique DATABASE_URL no .env (host/porta/credenciais).');
+  }
   
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✅ SA Comunicação - RAG + PGVector + Redis rodando em http://0.0.0.0:${PORT}`);

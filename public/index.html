@@ -36,6 +36,9 @@
       <a href="#" class="nav-item config-nav" data-view="config" id="nav-config">
         <span class="nav-icon">⚙️</span> Configurações IA
       </a>
+      <a href="#" class="nav-item" data-view="logs" id="nav-logs">
+        <span class="nav-icon">🧾</span> Logs
+      </a>
     </nav>
     <div class="sidebar-footer">
       <div class="legend-title">Classificação</div>
@@ -381,6 +384,23 @@
              <p style="color: var(--text-muted); font-size: 13px;">Carregando...</p>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── LOGS VIEW ── -->
+    <div id="view-logs" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Logs do Sistema</h1>
+          <p class="subtitle">Últimos eventos do backend (API, Redis, WhatsApp/Z-API, Gemini)</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btn-refresh-logs">↻ Atualizar</button>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Saída recente</div>
+        <pre id="system-logs" class="system-logs">Carregando...</pre>
       </div>
     </div>
 
