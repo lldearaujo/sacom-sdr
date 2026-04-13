@@ -978,10 +978,22 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 
     let lead  = leads.find((l) => l.cnpj === cnpj);
 
-    // [MODO TESTE] Verifica se é um número autorizado em .env (suporta vírgula, ponto-e-vírgula e espaço)
-    const rawTeste = process.env.NUMEROS_TESTE || '';
+    // [MODO TESTE] Lê NUMEROS_TESTE diretamente do .env em disco (evita problema de process.env stale após restart)
+    function lerNumerosTesteDoDisco() {
+      try {
+        const envPath = path.join(__dirname, '.env');
+        if (!fs.existsSync(envPath)) return process.env.NUMEROS_TESTE || '';
+        const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+        const line = lines.find(l => l.startsWith('NUMEROS_TESTE='));
+        if (!line) return process.env.NUMEROS_TESTE || '';
+        return line.substring('NUMEROS_TESTE='.length).trim().replace(/^['"]|['"]$/g, '');
+      } catch { return process.env.NUMEROS_TESTE || ''; }
+    }
+    const rawTeste = lerNumerosTesteDoDisco();
     const numerosAutorizados = rawTeste.split(/[,;\s]+/).map(n => n.replace(/\D/g, '')).filter(n => n.length > 5);
     const ehNumeroTeste = numerosAutorizados.some(nt => numero.includes(nt) || nt.includes(numero.substring(2)));
+
+    console.log(`[Webhook] Verificando bypass — rawTeste='${rawTeste}' | autorizados=[${numerosAutorizados.join(',')}] | ehTeste=${ehNumeroTeste}`);
 
     if (!lead && ehNumeroTeste) {
        console.log(`[Webhook] MODO TESTE DE DIRETORIA: Autorizando ${numero} para interagir com a IA.`);
@@ -991,12 +1003,12 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
          segmento: 'Testes de Validação', dorPrincipal: 'Testar e validar comportamento da IA BDR',
          ofertaPrincipal: 'Midia Exterior e OOH', classificacao: '🔴 HOT'
        };
-       // Registramos o cache "fake" para que a biblioteca de conversas o encontre na memóia
+       // Registramos o cache "fake" para que a biblioteca de conversas o encontre na memória
        if (!cache[cnpj]) { cache[cnpj] = { status: 'respondido', numero }; whatsapp.saveProspeccao(cache); }
     }
 
     if (!lead) {
-       console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado. (Valores Bypass em mem.: '${rawTeste}')`);
+       console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado. (rawTeste lido do disco: '${rawTeste}')`);
        return;
     }
 
