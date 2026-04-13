@@ -107,10 +107,20 @@ async function processarMensagemRAG(lead, mensagemCliente) {
   const historico = await cache.getConversaContexto(lead.cnpj, RAG_HISTORICO_LIMITE);
   
   // Converte formato interno {role, text} para formato do Gemini
-  const geminiHistory = historico.map(m => ({
+  let geminiHistory = historico.map(m => ({
     role: m.role,
     parts: [{ text: m.text }],
   }));
+
+  // A API do Gemini exige que o primeiro item do histórico seja role 'user'.
+  // No nosso fluxo, é comum o bot iniciar a conversa (role 'model'), então
+  // garantimos um "marcador" user sintético para evitar erro.
+  if (geminiHistory.length > 0 && geminiHistory[0]?.role !== 'user') {
+    geminiHistory = [
+      { role: 'user', parts: [{ text: '(início)' }] },
+      ...geminiHistory,
+    ];
+  }
 
   // 3. Inicializa modelo
   const chatModel = genAI.getGenerativeModel({
