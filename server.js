@@ -478,11 +478,12 @@ async function enriquecerLeadsLote(leads, options = {}) {
 }
 
 // ─── Leitura e processamento de todos os CSVs ───────────────────────────────
-function processarLeads() {
+async function processarLeads() {
   const csvFiles = fs.readdirSync(FONTES_DIR).filter(f => f.endsWith('.csv'));
   const leadsMap = new Map(); // deduplicação por CNPJ
 
   for (const fname of csvFiles) {
+    await sleep(0);
     const fpath = path.join(FONTES_DIR, fname);
     const buffer = fs.readFileSync(fpath);
     const raw = iconv.decode(buffer, 'iso-8859-1');
@@ -510,7 +511,9 @@ function processarLeads() {
 
     const segInfo = FILE_SEGMENT_MAP[fname] || { segmento: 'Outros', score: 10 };
 
+    let loopCount = 0;
     for (const row of rows) {
+      if (++loopCount % 500 === 0) await sleep(0);
       const cnpj = (row['CNPJ'] || '').trim();
       if (!cnpj || cnpj.length < 14) continue;
 
@@ -576,13 +579,19 @@ function processarLeads() {
 
 // ─── Cache dos leads ──────────────────────────────────────────────────────────
 let cachedLeads = null;
-function getLeads() {
-  if (!cachedLeads) {
-    console.log('Processando leads...');
-    cachedLeads = processarLeads();
-    console.log(`Total de leads únicos: ${cachedLeads.length}`);
+let processingPromise = null;
+async function getLeads() {
+  if (cachedLeads) return cachedLeads;
+  if (!processingPromise) {
+    processingPromise = (async () => {
+      console.log('Processando leads...');
+      const leads = await processarLeads();
+      console.log(`Total de leads únicos: ${leads.length}`);
+      cachedLeads = leads;
+      return cachedLeads;
+    })();
   }
-  return cachedLeads;
+  return processingPromise;
 }
 
 // ─── APIs ─────────────────────────────────────────────────────────────────────
@@ -595,7 +604,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/leads', async (req, res) => {
-  const leads = getLeads();
+  const leads = await getLeads();
   const {
     classificacao,
     segmento,
@@ -685,7 +694,7 @@ app.get('/api/leads', async (req, res) => {
 });
 
 app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
-  const leads = getLeads();
+  const leads = await getLeads();
   const { cnpj } = req.params;
   const shouldForceRefresh = String(req.query.force_refresh || '').toLowerCase() === 'true';
   const lead = leads.find((l) => l.cnpj === cnpj);
@@ -703,7 +712,7 @@ app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
 });
 
 app.get('/api/enrichment/warmup', async (req, res) => {
-  const leads = getLeads();
+  const leads = await getLeads();
   const shouldForceRefresh = String(req.query.force_refresh || '').toLowerCase() === 'true';
   const limit = Number.parseInt(req.query.limit || '20', 10);
   const concurrency = Number.parseInt(req.query.concurrency || String(MAX_ENRICHMENT_CONCURRENCY), 10);
@@ -727,8 +736,8 @@ app.get('/api/enrichment/warmup', async (req, res) => {
   });
 });
 
-app.get('/api/stats', (req, res) => {
-  const leads = getLeads();
+app.get('/api/stats', async (req, res) => {
+  const leads = await getLeads();
 
   // Contagem por classificação
   const porClassificacao = {};
@@ -853,7 +862,7 @@ app.use(express.json());
 // Body: { classificacoes: ['🔴 HOT', '🟠 WARM'], limite: 10, usarIA: true }
 app.post('/api/prospeccao/disparar', async (req, res) => {
   try {
-    const leads = getLeads();
+    const leads = await getLeads();
     const {
       classificacoes = ['🔴 HOT', '🟠 WARM'],
       limite = 10,
@@ -873,10 +882,10 @@ app.post('/api/prospeccao/disparar', async (req, res) => {
 });
 
 // ── GET /api/prospeccao/status ────────────────────────────────────────────────
-app.get('/api/prospeccao/status', (req, res) => {
+app.get('/api/prospeccao/status', async (req, res) => {
   try {
     const cache = whatsapp.loadProspeccao();
-    const leads = getLeads();
+    const leads = await getLeads();
 
     const entries = Object.entries(cache).map(([cnpj, data]) => {
       const lead = leads.find((l) => l.cnpj === cnpj) || {};
@@ -954,7 +963,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     const cnpj  = whatsapp.encontrarCnpjPorNumero(numero, cache);
     if (!cnpj) return;
 
-    const leads = getLeads();
+    const leads = await getLeads();
     const lead  = leads.find((l) => l.cnpj === cnpj);
     if (!lead) return;
 
@@ -987,7 +996,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 // ── GET /api/ai/insights ──────────────────────────────────────────────────────
 app.get('/api/ai/insights', async (req, res) => {
   try {
-    const leads    = getLeads();
+    const leads    = await getLeads();
     const insights = await gemini.analisarLeadsComIA(leads);
     res.json(insights);
   } catch (err) {
@@ -999,7 +1008,7 @@ app.get('/api/ai/insights', async (req, res) => {
 // Gera preview da mensagem que seria enviada para um lead específico
 app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
   try {
-    const leads = getLeads();
+    const leads = await getLeads();
     const lead  = leads.find((l) => l.cnpj === req.params.cnpj);
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
 
@@ -1082,6 +1091,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   📱 Z-API: ${process.env.ZAPI_INSTANCE_ID ? 'configurada' : 'não configurada (preencha .env)'}\n`);
   // Pré-carrega os leads após 2 segundos para não travar o Healthcheck do Docker
   setTimeout(() => {
-    getLeads();
+    getLeads().catch(err => console.error('Erro ao processar leads:', err));
   }, 2000);
 });
