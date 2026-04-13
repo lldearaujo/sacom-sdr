@@ -125,9 +125,15 @@ app.post('/api/prospeccao/disparar', async (req, res) => {
 
 app.get('/api/prospeccao/status', async (req, res) => {
   try {
-    const stats = { total: 0, porStatus: {} };
-    // Temporariamente mockamos a rota até precisarmos do breakdown total.
-    res.json({ stats, entries: [] }); 
+    const entries = await db.getAllProspeccoes();
+    const stats = {
+      total: entries.length,
+      porStatus: entries.reduce((acc, e) => {
+        acc[e.status] = (acc[e.status] || 0) + 1;
+        return acc;
+      }, {}),
+    };
+    res.json({ stats, entries });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

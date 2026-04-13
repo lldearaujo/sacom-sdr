@@ -350,6 +350,33 @@ async function getProspeccao(cnpj) {
   return rows[0] || null;
 }
 
+async function getAllProspeccoes() {
+  const { rows } = await pool.query(`
+    SELECT p.*, l.razao, l.fantasia, l.cidade, l.segmento_prioritario AS "segmentoPrioritario", l.classificacao
+    FROM prospeccao p
+    LEFT JOIN leads l ON p.cnpj = l.cnpj
+    ORDER BY p.atualizado_em DESC
+  `);
+  return rows.map(r => ({
+    cnpj: r.cnpj,
+    status: r.status,
+    enviadoEm: r.enviado_em,
+    zaapId: r.zaap_id,
+    messageId: r.message_id,
+    mensagem: r.mensagem,
+    numero: r.numero,
+    respondidoEm: r.respondido_em,
+    notas: r.notas,
+    tentativas: r.tentativas,
+    atualizadoEm: r.atualizado_em,
+    razao: r.razao,
+    fantasia: r.fantasia,
+    cidade: r.cidade,
+    segmentoPrioritario: r.segmentoPrioritario,
+    classificacao: r.classificacao,
+  }));
+}
+
 async function saveProspeccaoDB(cnpj, data) {
   await pool.query(`
     INSERT INTO prospeccao
@@ -566,6 +593,7 @@ module.exports = {
   saveEnrichment,
   // prospecção
   getProspeccao,
+  getAllProspeccoes,
   saveProspeccaoDB,
   getLeadsProspectadosHoje,
   emCooldownDB,
