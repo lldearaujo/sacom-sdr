@@ -1,0 +1,19 @@
+{
+  "name": "sacom-bdr-dashboard",
+  "version": "1.0.0",
+  "description": "SA Comunicação - Dashboard BDR de Leads DOOH/OOH",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:spawn": "node scripts/smoke-test.js --spawn"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "csv-parse": "^5.5.3",
+    "dotenv": "^17.3.1",
+    "express": "^4.18.2",
+    "iconv-lite": "^0.6.3"
+  }
+}

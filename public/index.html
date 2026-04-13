@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SA Comunicação · BDR Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon">SA</div>
+      <div>
+        <div class="brand-name">SA Comunicação</div>
+        <div class="brand-sub">BDR Dashboard</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-view="overview" id="nav-overview">
+        <span class="nav-icon">📊</span> Visão Geral
+      </a>
+      <a href="#" class="nav-item" data-view="leads" id="nav-leads">
+        <span class="nav-icon">🎯</span> Leads
+      </a>
+      <a href="#" class="nav-item" data-view="segmentos" id="nav-segmentos">
+        <span class="nav-icon">🏷️</span> Segmentos
+      </a>
+      <a href="#" class="nav-item prospeccao-nav" data-view="prospeccao" id="nav-prospeccao">
+        <span class="nav-icon">📤</span> Prospecção
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="legend-title">Classificação</div>
+      <div class="legend-item"><span class="badge hot">🔴 HOT</span> Score ≥ 90</div>
+      <div class="legend-item"><span class="badge warm">🟠 WARM</span> Score 70–89</div>
+      <div class="legend-item"><span class="badge medium">🟡 MEDIUM</span> Score 50–69</div>
+      <div class="legend-item"><span class="badge cool">🔵 COOL</span> Score 30–49</div>
+      <div class="legend-item"><span class="badge cold">⚪ COLD</span> Score &lt; 30</div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+
+    <!-- ── OVERVIEW VIEW ── -->
+    <div id="view-overview" class="view active">
+      <div class="page-header">
+        <div>
+          <h1>Visão Geral</h1>
+          <p class="subtitle">Panorama completo dos leads DOOH &amp; OOH</p>
+        </div>
+        <div class="header-tag">Atualizado: <span id="update-date"></span></div>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid" id="kpi-grid">
+        <div class="kpi-card kpi-total">
+          <div class="kpi-label">Total de Leads</div>
+          <div class="kpi-value" id="kpi-total">—</div>
+          <div class="kpi-sub">únicos deduplucados</div>
+        </div>
+        <div class="kpi-card kpi-hot">
+          <div class="kpi-label">🔴 HOT</div>
+          <div class="kpi-value" id="kpi-hot">—</div>
+          <div class="kpi-sub">abordagem imediata</div>
+        </div>
+        <div class="kpi-card kpi-warm">
+          <div class="kpi-label">🟠 WARM</div>
+          <div class="kpi-value" id="kpi-warm">—</div>
+          <div class="kpi-sub">alta prioridade</div>
+        </div>
+        <div class="kpi-card kpi-medium">
+          <div class="kpi-label">🟡 MEDIUM</div>
+          <div class="kpi-value" id="kpi-medium">—</div>
+          <div class="kpi-sub">prioridade média</div>
+        </div>
+        <div class="kpi-card kpi-score">
+          <div class="kpi-label">Score Médio</div>
+          <div class="kpi-value" id="kpi-score">—</div>
+          <div class="kpi-sub">pontos</div>
+        </div>
+        <div class="kpi-card kpi-score-comercial">
+          <div class="kpi-label">Score Comercial</div>
+          <div class="kpi-value" id="kpi-score-comercial">—</div>
+          <div class="kpi-sub">ICP + fit territorial</div>
+        </div>
+        <div class="kpi-card kpi-email">
+          <div class="kpi-label">Com Email</div>
+          <div class="kpi-value" id="kpi-email">—</div>
+          <div class="kpi-sub">contato digital</div>
+        </div>
+      </div>
+
+      <!-- Charts Row 1 -->
+      <div class="charts-row">
+        <div class="chart-card wide">
+          <div class="chart-title">Distribuição por Classificação</div>
+          <canvas id="chart-classificacao" height="90"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Porte das Empresas</div>
+          <canvas id="chart-porte" height="180"></canvas>
+        </div>
+      </div>
+
+      <!-- Charts Row 2 -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-title">Top 10 Cidades</div>
+          <canvas id="chart-cidades" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Qualidade de Contatos</div>
+          <canvas id="chart-contatos" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Top 5 HOT Leads -->
+      <div class="section-header">⭐ Top Leads por Score</div>
+      <div class="top5-grid" id="top5-grid"></div>
+    </div>
+
+    <!-- ── LEADS VIEW ── -->
+    <div id="view-leads" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Leads</h1>
+          <p class="subtitle" id="leads-subtitle">Carregando...</p>
+        </div>
+      </div>
+
+      <!-- Filtros -->
+      <div class="filters-bar">
+        <input type="text" id="filter-search" class="filter-input" placeholder="🔍 Buscar empresa, CNPJ..." />
+        <select id="filter-class" class="filter-select">
+          <option value="">Todas classificações</option>
+          <option value="🔴 HOT">🔴 HOT</option>
+          <option value="🟠 WARM">🟠 WARM</option>
+          <option value="🟡 MEDIUM">🟡 MEDIUM</option>
+          <option value="🔵 COOL">🔵 COOL</option>
+          <option value="⚪ COLD">⚪ COLD</option>
+        </select>
+        <select id="filter-seg" class="filter-select">
+          <option value="">Todos segmentos</option>
+        </select>
+        <select id="filter-consciencia" class="filter-select">
+          <option value="">Nivel de consciencia</option>
+        </select>
+        <select id="filter-viabilidade" class="filter-select">
+          <option value="">Viabilidade financeira</option>
+        </select>
+        <select id="filter-canal" class="filter-select">
+          <option value="">Canal preferencial</option>
+        </select>
+        <select id="filter-dor" class="filter-select">
+          <option value="">Dor principal</option>
+        </select>
+        <select id="filter-objetivo" class="filter-select">
+          <option value="">Objetivo curto prazo</option>
+        </select>
+        <select id="filter-seg-prio" class="filter-select">
+          <option value="">Segmento prioritario SA</option>
+        </select>
+        <select id="filter-recorrencia" class="filter-select">
+          <option value="">Potencial recorrencia</option>
+        </select>
+        <select id="filter-oferta" class="filter-select">
+          <option value="">Oferta principal</option>
+        </select>
+        <select id="filter-pacote" class="filter-select">
+          <option value="">Pacote sugerido</option>
+        </select>
+        <select id="filter-prioridade" class="filter-select">
+          <option value="">Prioridade comercial</option>
+        </select>
+        <select id="filter-etapa" class="filter-select">
+          <option value="">Etapa do funil</option>
+        </select>
+        <select id="filter-gatilho" class="filter-select">
+          <option value="">Gatilho identificado</option>
+        </select>
+        <select id="filter-order" class="filter-select">
+          <option value="score_comercial">Ordenar por score comercial</option>
+          <option value="score">Ordenar por score base</option>
+        </select>
+        <button class="btn-filter" id="btn-filter">Filtrar</button>
+        <button class="btn-clear" id="btn-clear">Limpar</button>
+      </div>
+
+      <!-- Tabela -->
+      <div class="table-wrapper">
+        <table class="leads-table" id="leads-table">
+          <thead>
+            <tr>
+              <th>Classificação</th>
+              <th>Score</th>
+              <th>Empresa</th>
+              <th>Segmento</th>
+              <th>Segmento SA</th>
+              <th>Cidade/UF</th>
+              <th>Telefone</th>
+              <th>E-mail</th>
+              <th>Site</th>
+              <th>Pacote</th>
+              <th>Prioridade</th>
+            </tr>
+          </thead>
+          <tbody id="leads-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Paginação -->
+      <div class="pagination" id="pagination"></div>
+
+      <!-- Insight Comercial -->
+      <div class="section-header">Resumo Comercial do Lead</div>
+      <div id="lead-insight" class="lead-insight">
+        <div class="insight-empty">Selecione um lead para ver recomendacoes comerciais.</div>
+      </div>
+    </div>
+
+    <!-- ── SEGMENTOS VIEW ── -->
+    <div id="view-segmentos" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Segmentos</h1>
+          <p class="subtitle">Volume e qualidade por segmento de origem</p>
+        </div>
+      </div>
+      <div class="chart-card full-width">
+        <div class="chart-title">Leads por Segmento de Origem</div>
+        <canvas id="chart-segmentos" height="120"></canvas>
+      </div>
+      <div id="segmentos-cards" class="segmentos-grid"></div>
+    </div>
+
+    <!-- ── PROSPECÇÃO VIEW ── -->
+    <div id="view-prospeccao" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Prospecção WhatsApp & Gemini</h1>
+          <p class="subtitle">Disparos IA, Pipeline e Interações</p>
+        </div>
+        <div class="header-actions">
+           <button class="btn btn-primary" id="btn-disparar-ia">🚀 Disparar Lote (IA)</button>
+        </div>
+      </div>
+
+      <!-- IA Insights Panel -->
+      <div class="ia-insights-panel" id="ia-insights">
+         <div class="ia-header">🤖 Insights Estratégicos Gemini</div>
+         <div class="ia-content" id="ia-insights-content">
+            <p class="ia-loading">Carregando insights...</p>
+         </div>
+      </div>
+
+      <!-- Kanban Board -->
+      <div class="kanban-board" id="kanban-prospeccao">
+         <div class="kanban-column" id="col-enviado">
+            <h3><span class="count" id="count-enviado">0</span> 📤 Enviados</h3>
+            <div class="kanban-cards" id="cards-enviado"></div>
+         </div>
+         <div class="kanban-column" id="col-respondido">
+            <h3><span class="count" id="count-respondido">0</span> 💬 Respondidos</h3>
+            <div class="kanban-cards" id="cards-respondido"></div>
+         </div>
+         <div class="kanban-column" id="col-oportunidade">
+            <h3><span class="count" id="count-oportunidade">0</span> 🔥 Oportunidades</h3>
+            <div class="kanban-cards" id="cards-oportunidade"></div>
+         </div>
+         <div class="kanban-column" id="col-erro">
+            <h3><span class="count" id="count-erro">0</span> ❌ Erros</h3>
+            <div class="kanban-cards" id="cards-erro"></div>
+         </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
