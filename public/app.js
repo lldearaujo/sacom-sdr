@@ -783,6 +783,7 @@ async function initConfigView() {
     document.getElementById('cfg-system-prompt').value = config.BDR_SYSTEM_PROMPT || '';
     document.getElementById('cfg-objetivo-conversa').value = config.BDR_OBJETIVO_CONVERSA || '';
     document.getElementById('cfg-intent-deteccao').value = config.BDR_INTENT_DETECCAO || '';
+    document.getElementById('cfg-public-base-url').value = config.PUBLIC_BASE_URL || '';
     document.getElementById('cfg-gemini-model').value = config.GEMINI_MODEL || '';
     document.getElementById('cfg-gemini-temp').value = config.GEMINI_TEMPERATURA || '';
     document.getElementById('cfg-hora-inicio').value = config.PROSPECCAO_HORA_INICIO || '';
@@ -810,6 +811,7 @@ async function initConfigView() {
       BDR_SYSTEM_PROMPT: document.getElementById('cfg-system-prompt').value,
       BDR_OBJETIVO_CONVERSA: document.getElementById('cfg-objetivo-conversa').value,
       BDR_INTENT_DETECCAO: document.getElementById('cfg-intent-deteccao').value,
+      PUBLIC_BASE_URL: document.getElementById('cfg-public-base-url').value,
       GEMINI_MODEL: document.getElementById('cfg-gemini-model').value,
       GEMINI_TEMPERATURA: document.getElementById('cfg-gemini-temp').value,
       PROSPECCAO_HORA_INICIO: document.getElementById('cfg-hora-inicio').value,

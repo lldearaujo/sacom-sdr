@@ -2,6 +2,7 @@
 
 const db = require('./db');
 const cache = require('./cache'); // Usaremos para locks
+const mediaCatalog = require('./media');
 
 const ZAPI_BASE = () =>
   `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
@@ -55,6 +56,82 @@ async function enviarMensagem(numero, mensagem) {
     throw new Error(`Z-API ${res.status}: ${err}`);
   }
   return res.json(); // { zaapId, messageId, id }
+}
+
+async function zapiPost(suffixPath, body) {
+  if (!process.env.ZAPI_INSTANCE_ID || !process.env.ZAPI_TOKEN) {
+    throw new Error('Z-API não configurada. Preencha ZAPI_INSTANCE_ID e ZAPI_TOKEN no .env');
+  }
+  const res = await fetch(`${ZAPI_BASE()}${suffixPath}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Client-Token': process.env.ZAPI_CLIENT_TOKEN || '',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Z-API ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+/**
+ * Envia um arquivo de mídia (URL pública HTTPS) via Z-API.
+ * type: image | video | document | audio
+ */
+async function enviarMidia(numero, { type, url, caption, fileName }) {
+  const phone = numero;
+  switch (type) {
+    case 'image':
+      return zapiPost('/send-image', { phone, image: url, caption: caption || '', viewOnce: false });
+    case 'video':
+      return zapiPost('/send-video', { phone, video: url, caption: caption || '', viewOnce: false });
+    case 'document':
+      return zapiPost('/send-document', {
+        phone,
+        document: url,
+        fileName: fileName || 'documento.pdf',
+      });
+    case 'audio':
+      return zapiPost('/send-audio', { phone, audio: url, viewOnce: false });
+    default:
+      throw new Error(`Tipo de mídia não suportado: ${type}`);
+  }
+}
+
+const DELAY_ENTRE_MIDIAS_MS = 800;
+
+/**
+ * Envia múltiplas mídias do catálogo (server/media-manifest.json + public/media).
+ */
+async function enviarMidiasCatalogo(numero, mediaKeys) {
+  if (!mediaKeys || !mediaKeys.length) return { enviados: 0 };
+
+  const base = (process.env.PUBLIC_BASE_URL || '').trim();
+  if (!base) {
+    console.warn('[WhatsApp] PUBLIC_BASE_URL não definido; não é possível enviar mídias por URL.');
+    return { skipped: true, motivo: 'PUBLIC_BASE_URL ausente' };
+  }
+
+  let enviados = 0;
+  for (let i = 0; i < mediaKeys.length; i++) {
+    const key = mediaKeys[i];
+    const resolved = mediaCatalog.resolveMediaUrl(key);
+    if (!resolved) {
+      console.warn(`[WhatsApp] Mídia ignorada (chave inválida ou arquivo ausente): ${key}`);
+      continue;
+    }
+    try {
+      await enviarMidia(numero, { type: resolved.type, url: resolved.url, fileName: resolved.fileName, caption: resolved.caption });
+      enviados++;
+      if (i < mediaKeys.length - 1) await new Promise((r) => setTimeout(r, DELAY_ENTRE_MIDIAS_MS));
+    } catch (err) {
+      console.error(`[WhatsApp] Falha ao enviar mídia "${key}":`, err.message);
+    }
+  }
+  return { enviados };
 }
 
 // ─── Disparo de lote de leads ─────────────────────────────────────────────────
@@ -164,6 +241,8 @@ async function encontrarCnpjPorNumero(numero) {
 
 module.exports = {
   enviarMensagem,
+  enviarMidia,
+  enviarMidiasCatalogo,
   dispararLote,
   formatarNumero,
   encontrarCnpjPorNumero,

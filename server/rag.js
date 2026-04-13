@@ -9,6 +9,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./db');
 const cache = require('./cache');
+const media = require('./media');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -103,8 +104,11 @@ Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao fi
   const intentCustom = readEnvMultiline('BDR_INTENT_DETECCAO').trim();
   const blocoIntent = intentCustom.length > 0 ? intentCustom : intentPadrao;
 
+  const blocoMidia = media.blocoPromptMidia();
+
   const systemPrompt = `${promptInjetado}
 ${perfilSintetico}${knowledgeStr}${similaresStr}
+${blocoMidia}
 
 ${blocoIntent}
 `;
@@ -161,19 +165,21 @@ async function processarMensagemRAG(lead, mensagemCliente) {
   // 5. Salva mensagens no banco e no cache
   await cache.appendMensagemConversa(lead.cnpj, 'user', mensagemCliente);
 
-  // 6. Extrai intent
+  // 6. Extrai intent e mídias [[MEDIA:chave]]
   const intentMatch = respostaCompleta.match(/<intent>([\s\S]+?)<\/intent>/);
   let intent = null;
-  const respostaLimpa = respostaCompleta.replace(/<intent>[\s\S]*?<\/intent>/, '').trim();
+  const semIntent = respostaCompleta.replace(/<intent>[\s\S]*?<\/intent>/, '').trim();
 
   if (intentMatch) {
     try { intent = JSON.parse(intentMatch[1]); } catch { /* ignora */ }
   }
 
-  // Salva resposta da IA
-  await cache.appendMensagemConversa(lead.cnpj, 'model', respostaCompleta);
+  const { texto: respostaLimpa, mediaKeys } = media.extrairMidiasDaResposta(semIntent);
 
-  return { resposta: respostaLimpa, intent };
+  // Salva no histórico só o texto exibido ao lead (sem tags internas)
+  await cache.appendMensagemConversa(lead.cnpj, 'model', respostaLimpa);
+
+  return { resposta: respostaLimpa, intent, mediaKeys };
 }
 
 module.exports = {

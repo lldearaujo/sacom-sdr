@@ -64,6 +64,21 @@ app.get('/api/system/logs', (req, res) => {
   res.json({ logs });
 });
 
+const mediaMod = require('./server/media');
+app.get('/api/media/catalog', (req, res) => {
+  const m = mediaMod.loadManifest();
+  const entries = Object.entries(m)
+    .filter(([k]) => !k.startsWith('_'))
+    .map(([k, v]) => ({
+      key: k,
+      type: v && v.type,
+      file: v && v.file,
+      fileName: (v && v.fileName) || (v && v.file),
+      descricao: (v && v.descricao) || '',
+    }));
+  res.json({ entries });
+});
+
 app.get('/api/leads', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
@@ -242,7 +257,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     console.log(`[Webhook] Processando mensagem para: ${lead.razao} (${cnpj})`);
 
     // 🤖 Gemini processa via engine RAG
-    const { resposta, intent } = await gemini.processarRespostaLead(lead, mensagem);
+    const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(lead, mensagem);
 
     // Salva intent se detectado
     if (intent?.interesse) {
@@ -253,8 +268,14 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     // Delay humanizado (2–4s)
     await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
 
-    // Envia resposta via Z-API
-    await whatsapp.enviarMensagem(numero, resposta);
+    // Texto primeiro; mídias do catálogo em seguida (URLs públicas)
+    if (resposta && resposta.trim()) {
+      await whatsapp.enviarMensagem(numero, resposta);
+    }
+    if (mediaKeys.length) {
+      const rMidia = await whatsapp.enviarMidiasCatalogo(numero, mediaKeys);
+      if (rMidia.enviados) console.log(`[Webhook] Mídias enviadas: ${rMidia.enviados} (${mediaKeys.join(', ')})`);
+    }
 
   } catch (err) {
     console.error('Erro no webhook Gemini/Z-API:', err.message);
@@ -294,7 +315,7 @@ app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
 const MULTILINE_CONFIG_KEYS = new Set(['BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO']);
 
 app.get('/api/config', (req, res) => {
-  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
+  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE', 'PUBLIC_BASE_URL'];
   const responseConfig = {};
   keys.forEach(k => {
     let val = process.env[k] || '';
