@@ -11,6 +11,7 @@ const db = require('./db');
 const cache = require('./cache');
 const media = require('./media');
 const whatsappInbound = require('./whatsapp-inbound');
+const { trunc } = require('./token-utils');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -21,13 +22,22 @@ function readEnvMultiline(key) {
 }
 
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
-const RAG_HISTORICO_LIMITE = parseInt(process.env.RAG_HISTORICO_LIMITE || '5', 10);
+const RAG_HISTORICO_LIMITE = parseInt(process.env.RAG_HISTORICO_LIMITE || '4', 10);
 const RAG_LEADS_SIMILARES = parseInt(process.env.RAG_LEADS_SIMILARES || '2', 10);
+const RAG_KNOWLEDGE_CHUNKS = parseInt(process.env.RAG_KNOWLEDGE_CHUNKS || '2', 10);
+/** Texto do usuário para embedding + busca vetorial (não precisa do texto inteiro). */
+const RAG_QUERY_MAX_CHARS = parseInt(process.env.RAG_QUERY_MAX_CHARS || '2000', 10);
+const RAG_KNOWLEDGE_MAX_CHARS = parseInt(process.env.RAG_KNOWLEDGE_MAX_CHARS || '520', 10);
+const RAG_SIMILAR_LINE_MAX = parseInt(process.env.RAG_SIMILAR_LINE_MAX || '120', 10);
+const RAG_PERFIL_CAMPO_MAX = parseInt(process.env.RAG_PERFIL_CAMPO_MAX || '220', 10);
+/** Cada mensagem no histórico enviada ao Gemini (role user/model). */
+const RAG_HISTORICO_MSG_MAX_CHARS = parseInt(process.env.RAG_HISTORICO_MSG_MAX_CHARS || '900', 10);
 
 // Gera Embedding para um texto
 async function getEmbedding(text) {
   const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-  const result = await model.embedContent(text);
+  const payload = trunc(text, RAG_QUERY_MAX_CHARS);
+  const result = await model.embedContent(payload);
   return result.embedding.values; // Array de floats (768 dimensões)
 }
 
@@ -47,15 +57,17 @@ async function buildContextoRAG(lead, mensagemCliente) {
     });
 
     if (similares.length > 0) {
-      similaresStr = '\n\n## REFERÊNCIA (Cases):\n' + 
-        similares.map(s => `- Cliente similar: ${s.razao}. Dor: '${s.dor_principal}'.`).join('\n');
+      similaresStr = '\n## Cases\n' +
+        similares.map((s) =>
+          `- ${trunc(s.razao, 60)} | dor: ${trunc(s.dor_principal || '', RAG_SIMILAR_LINE_MAX)}`
+        ).join('\n');
     }
 
     // 2.5 Busca fragmentos do Treinamento (Knowledge Base)
-    const conhecimentosBase = await db.searchKnowledge(embeddingMensagem, 3);
+    const conhecimentosBase = await db.searchKnowledge(embeddingMensagem, RAG_KNOWLEDGE_CHUNKS);
     if (conhecimentosBase.length > 0) {
-      knowledgeStr = '\n\n## CONHECIMENTO BASE (Tabela de preços, portfólio, manuais institucionais):\n' +
-        conhecimentosBase.map(k => `- [${k.titulo}]: ${k.conteudo}`).join('\n\n');
+      knowledgeStr = '\n## KB\n' +
+        conhecimentosBase.map((k) => `- ${trunc(k.titulo, 80)}: ${trunc(k.conteudo, RAG_KNOWLEDGE_MAX_CHARS)}`).join('\n');
     }
 
   } catch (e) {
@@ -64,12 +76,11 @@ async function buildContextoRAG(lead, mensagemCliente) {
 
   // 3. Monta o Perfil Sintético do Lead Atual (Economiza tokens do System Prompt)
   const perfilSintetico = `
-## SOBRE O LEAD ATUAL
-Empresa: ${lead.fantasia || lead.razao} (${lead.cidade})
-Segmento: ${lead.cnae || 'Variado'}
-Dor Principal: ${lead.dor_principal || lead.dorPrincipal || 'Atrair clientes'}
-Oferta Recomendada: ${lead.oferta_principal || lead.ofertaPrincipal || 'OOH Geral'}
-Pitch Sugerido: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local'}"
+## Lead
+${trunc(lead.fantasia || lead.razao, 80)} · ${trunc(lead.cidade || '', 40)} | ${trunc(lead.cnae || 'Variado', 80)}
+Dor: ${trunc(lead.dor_principal || lead.dorPrincipal || 'Atrair clientes', RAG_PERFIL_CAMPO_MAX)}
+Oferta: ${trunc(lead.oferta_principal || lead.ofertaPrincipal || 'OOH Geral', RAG_PERFIL_CAMPO_MAX)}
+Pitch: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local', RAG_PERFIL_CAMPO_MAX)}
 `;
 
   // 4. Combina com o Base System Prompt Configurável
@@ -80,14 +91,12 @@ Pitch Sugerido: "${lead.discurso_consultivo || lead.discursoConsultivo || 'Mostr
     readEnvMultiline('BDR_OBJETIVO_CONVERSA').trim() ||
     'Agendar apresentação/reunião.';
 
-  // Se o Prompt não foi configurado na UI ainda, usamos o padrão!
+  // Se o Prompt não foi configurado na UI ainda, usamos o padrão (compacto).
   let promptCustomizado = process.env.BDR_SYSTEM_PROMPT;
-  if (!promptCustomizado || promptCustomizado.trim().length === 0) {
-    promptCustomizado = `Você é {{agente}}, {{cargo}} da SA Comunicação (Cajazeiras/PB, 11 anos de mercado).
-Soluções: Painel de LED (DOOH), Outdoor, Rádio, Carro de Som e Marketing.
-Tom: Como uma pessoa no WhatsApp — calorosa, direta, sem jargão forçado. Evite soar como e-mail marketing ou texto único gigante.
-Forma: Use 2 a 4 blocos curtos, separados por linha em branco (como várias mensagens). Cada bloco com 1–3 frases. Varie o início quando fizer sentido.
-Objetivo: ${objetivoConversa}`;
+  const usaPromptPadraoInterno = !promptCustomizado || promptCustomizado.trim().length === 0;
+  if (usaPromptPadraoInterno) {
+    promptCustomizado = `{{agente}}, {{cargo}} · SA Comunicação (Cajazeiras/PB). Mix: DOOH LED, outdoor, rádio, marketing.
+WhatsApp humano: 2–4 blocos curtos (linha em branco entre eles), sem tom de e-mail. Objetivo: ${objetivoConversa}`;
   }
 
   // Substitui tags
@@ -99,24 +108,21 @@ Objetivo: ${objetivoConversa}`;
     .replace(/\$\{agente\}/g, agente)
     .replace(/\$\{cargo\}/g, cargo);
 
-  const intentPadrao = `## DETECÇÃO DE INTENÇÃO (OCULTA)
-Se o lead demonstrar interesse (querer proposta, agendar), adicione APENAS ao final da sua resposta:
-<intent>{"interesse": true, "tipo": "agendamento|proposta", "urgencia": "alta|media|baixa"}</intent>`;
+  const intentPadrao = `Ao final, se houver interesse real em proposta/agendamento: <intent>{"interesse":true,"tipo":"agendamento|proposta","urgencia":"alta|media|baixa"}</intent>`;
 
   const intentCustom = readEnvMultiline('BDR_INTENT_DETECCAO').trim();
   const blocoIntent = intentCustom.length > 0 ? intentCustom : intentPadrao;
 
   const blocoMidia = media.blocoPromptMidia();
 
-  const blocoEstiloWhats = `
-## ESTILO (obrigatório)
-Responda sempre como conversa de WhatsApp real: mensagens curtas, uma ideia por bloco, separadas por linha em branco. Não junta tudo num parágrafo só.`;
+  // Evita repetir instruções de estilo quando o prompt padrão já as inclui (economiza tokens).
+  const blocoEstiloWhats = usaPromptPadraoInterno
+    ? ''
+    : '\nEstilo: WhatsApp — blocos curtos separados por linha em branco.\n';
 
   const systemPrompt = `${promptInjetado}
 ${perfilSintetico}${knowledgeStr}${similaresStr}
-${blocoMidia}
-${blocoEstiloWhats}
-
+${blocoMidia}${blocoEstiloWhats}
 ${blocoIntent}
 `;
 
@@ -133,7 +139,7 @@ async function processarMensagemRAG(lead, userInput) {
       ? userInput.parts
       : [];
 
-  const textoParaEmbedding = (userText.trim() || '(conteúdo multimodal)').slice(0, 8000);
+  const textoParaEmbedding = userText.trim() || '(conteúdo multimodal)';
 
   // 1. Monta o contexto injetado (System Instruction)
   const systemInstructionText = await buildContextoRAG(lead, textoParaEmbedding);
@@ -142,9 +148,9 @@ async function processarMensagemRAG(lead, userInput) {
   const historico = await cache.getConversaContexto(lead.cnpj, RAG_HISTORICO_LIMITE);
   
   // Converte formato interno {role, text} para formato do Gemini
-  let geminiHistory = historico.map(m => ({
+  let geminiHistory = historico.map((m) => ({
     role: m.role,
-    parts: [{ text: m.text }],
+    parts: [{ text: trunc(m.text, RAG_HISTORICO_MSG_MAX_CHARS) }],
   }));
 
   // A API do Gemini exige que o primeiro item do histórico seja role 'user'.
@@ -161,7 +167,7 @@ async function processarMensagemRAG(lead, userInput) {
   const chatModel = genAI.getGenerativeModel({
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
     generationConfig: {
-      maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '1024', 10),
+      maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '768', 10),
       temperature: parseFloat(process.env.GEMINI_TEMPERATURA || '0.7'),
     },
   });

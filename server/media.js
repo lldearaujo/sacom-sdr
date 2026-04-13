@@ -77,21 +77,16 @@ function blocoPromptMidia() {
     const e = m[k];
     const tipo = e && e.type ? e.type : '?';
     const arq = e && e.file ? e.file : '';
-    const desc = e && e.descricao ? ` — ${e.descricao}` : '';
-    return `- [[MEDIA:${k}]] → ${tipo}: ${arq}${desc}`;
+    const desc = e && e.descricao ? ` ${String(e.descricao).slice(0, 60)}` : '';
+    return `- [[MEDIA:${k}]] ${tipo} ${arq}${desc}`;
   });
 
   return `
 
-## MÍDIA DO CATÁLOGO (WhatsApp)
-Quando fizer sentido (ex.: lead pediu tabela, portfólio, áudio institucional), você pode anexar arquivos **já cadastrados** no servidor.
-Inclua **no final** da sua resposta, uma linha por arquivo, usando exatamente esta marcação (chaves válidas abaixo):
-[[MEDIA:chave]]
-
-Chaves disponíveis:
+## Mídia (opcional)
+No fim da resposta, uma linha por arquivo: [[MEDIA:chave]]
 ${lines.join('\n')}
-
-Não invente chaves. Se nenhuma mídia for adequada, não use [[MEDIA:...]].`;
+(só chaves listadas; senão omita.)`;
 }
 
 /**
