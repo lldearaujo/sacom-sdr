@@ -1016,6 +1016,64 @@ app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
   }
 });
 
+// ── GET /api/config ───────────────────────────────────────────────────────────
+app.get('/api/config', (req, res) => {
+  const envPath = path.join(__dirname, '.env');
+  let config = {};
+  try {
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      content.split('\n').forEach(line => {
+        const idx = line.indexOf('=');
+        if (idx > 0) {
+           const key = line.substring(0, idx).trim();
+           const val = line.substring(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+           config[key] = val;
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Erro ao ler .env', err);
+  }
+
+  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO'];
+  const responseConfig = {};
+  keys.forEach(k => {
+    responseConfig[k] = config[k] !== undefined ? config[k] : (process.env[k] || '');
+  });
+
+  res.json(responseConfig);
+});
+
+// ── POST /api/config ──────────────────────────────────────────────────────────
+app.post('/api/config', (req, res) => {
+  try {
+    const envPath = path.join(__dirname, '.env');
+    let lines = [];
+    if (fs.existsSync(envPath)) {
+      lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    }
+
+    const updates = req.body;
+    if (!updates) return res.status(400).json({ error: 'Nenhuma configuracao fornecida' });
+
+    for (const [key, value] of Object.entries(updates)) {
+      process.env[key] = value;
+      const idx = lines.findIndex(l => l.startsWith(key + '='));
+      if (idx !== -1) {
+        lines[idx] = `${key}=${value}`;
+      } else {
+        lines.push(`${key}=${value}`);
+      }
+    }
+
+    fs.writeFileSync(envPath, lines.join('\n').trim() + '\n', 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.listen(PORT, '0.0.0.0', () => {

@@ -68,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (view === 'leads' && !leadsViewInitialized) initLeadsView();
       if (view === 'segmentos') initSegmentosView();
       if (view === 'prospeccao') initProspeccaoView();
+      if (view === 'config') initConfigView();
     });
   });
 
@@ -729,4 +730,70 @@ async function openHistoricoModal(cnpj, nome, status) {
   } catch (e) {
      document.getElementById('hist-body').innerHTML = '<p style="color:var(--text-muted)">Falha ao carregar histórico... Talvez não haja interações com o bot.</p>';
   }
+}
+
+/* ── Configurações IA View ────────────────────────────────────── */
+let configViewInitialized = false;
+
+async function initConfigView() {
+  if (configViewInitialized) return;
+  configViewInitialized = true;
+
+  const btnSalvar = document.getElementById('btn-salvar-config');
+  const msg = document.getElementById('config-status-msg');
+
+  try {
+    const config = await fetchJson('/api/config');
+    document.getElementById('cfg-agente-nome').value = config.BDR_AGENTE_NOME || '';
+    document.getElementById('cfg-agente-cargo').value = config.BDR_AGENTE_CARGO || '';
+    document.getElementById('cfg-gemini-model').value = config.GEMINI_MODEL || '';
+    document.getElementById('cfg-gemini-temp').value = config.GEMINI_TEMPERATURA || '';
+    document.getElementById('cfg-hora-inicio').value = config.PROSPECCAO_HORA_INICIO || '';
+    document.getElementById('cfg-hora-fim').value = config.PROSPECCAO_HORA_FIM || '';
+    document.getElementById('cfg-cooldown').value = config.PROSPECCAO_COOLDOWN_DIAS || '';
+    document.getElementById('cfg-limite').value = config.PROSPECCAO_LIMITE_DIARIO || '';
+  } catch (err) {
+    showMsg('Erro ao carregar configurações: ' + err.message, 'error');
+  }
+
+  function showMsg(text, type) {
+    msg.textContent = text;
+    msg.style.display = 'block';
+    msg.style.backgroundColor = type === 'success' ? '#065f46' : '#7f1d1d';
+    msg.style.color = type === 'success' ? '#a7f3d0' : '#fecaca';
+    msg.style.border = `1px solid ${type === 'success' ? '#059669' : '#b91c1c'}`;
+    setTimeout(() => msg.style.display = 'none', 5000);
+  }
+
+  btnSalvar.addEventListener('click', async () => {
+    const updates = {
+      BDR_AGENTE_NOME: document.getElementById('cfg-agente-nome').value,
+      BDR_AGENTE_CARGO: document.getElementById('cfg-agente-cargo').value,
+      GEMINI_MODEL: document.getElementById('cfg-gemini-model').value,
+      GEMINI_TEMPERATURA: document.getElementById('cfg-gemini-temp').value,
+      PROSPECCAO_HORA_INICIO: document.getElementById('cfg-hora-inicio').value,
+      PROSPECCAO_HORA_FIM: document.getElementById('cfg-hora-fim').value,
+      PROSPECCAO_COOLDOWN_DIAS: document.getElementById('cfg-cooldown').value,
+      PROSPECCAO_LIMITE_DIARIO: document.getElementById('cfg-limite').value
+    };
+
+    btnSalvar.disabled = true;
+    btnSalvar.textContent = 'Salvando...';
+
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao salvar');
+      showMsg('Configurações da IA atualizadas com sucesso!', 'success');
+    } catch (err) {
+      showMsg('Erro: ' + err.message, 'error');
+    } finally {
+      btnSalvar.disabled = false;
+      btnSalvar.textContent = '💾 Salvar Configurações';
+    }
+  });
 }

@@ -428,6 +428,12 @@ body {
 .chat-bubble.user { background: linear-gradient(135deg,rgba(59,130,246,.2),rgba(99,102,241,.1)); border: 1px solid rgba(59,130,246,.25); align-self: flex-end; border-bottom-right-radius: 4px; color: var(--text); }
 .chat-role { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
 
+/* ── Configurações IA ─────────────────────────────────────────── */
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.config-section { display: flex; flex-direction: column; gap: 14px; }
+.input-row { display: flex; gap: 12px; }
+.input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.input-group label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
 
 /* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

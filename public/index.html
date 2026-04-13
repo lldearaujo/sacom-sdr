@@ -33,6 +33,9 @@
       <a href="#" class="nav-item prospeccao-nav" data-view="prospeccao" id="nav-prospeccao">
         <span class="nav-icon">📤</span> Prospecção
       </a>
+      <a href="#" class="nav-item config-nav" data-view="config" id="nav-config">
+        <span class="nav-icon">⚙️</span> Configurações IA
+      </a>
     </nav>
     <div class="sidebar-footer">
       <div class="legend-title">Classificação</div>
@@ -277,6 +280,71 @@
             <h3><span class="count" id="count-erro">0</span> ❌ Erros</h3>
             <div class="kanban-cards" id="cards-erro"></div>
          </div>
+      </div>
+    </div>
+
+    <!-- ── CONFIGURAÇÕES IA VIEW ── -->
+    <div id="view-config" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Configurações IA</h1>
+          <p class="subtitle">Ajuste o comportamento do Agente e limites do sistema</p>
+        </div>
+        <div class="header-actions">
+           <button class="btn btn-primary" id="btn-salvar-config">💾 Salvar Configurações</button>
+        </div>
+      </div>
+      
+      <div id="config-status-msg" style="display:none; padding:12px; margin-bottom:16px; border-radius:8px; font-weight:600;"></div>
+
+      <div class="config-grid">
+        <div class="chart-card config-section">
+          <div class="chart-title">🤖 Perfil do Agente</div>
+          <div class="input-group">
+            <label>Nome da Agente</label>
+            <input type="text" id="cfg-agente-nome" class="filter-input" placeholder="Ex: Lourdes">
+          </div>
+          <div class="input-group">
+            <label>Cargo da Agente</label>
+            <input type="text" id="cfg-agente-cargo" class="filter-input" placeholder="Ex: Consultora de Mídia">
+          </div>
+        </div>
+
+        <div class="chart-card config-section">
+          <div class="chart-title">⚙️ Motor Gemini (IA)</div>
+          <div class="input-group">
+            <label>Modelo (Model)</label>
+            <input type="text" id="cfg-gemini-model" class="filter-input" placeholder="Ex: gemini-2.0-flash">
+          </div>
+          <div class="input-group">
+            <label>Temperatura (Criatividade: 0.0 a 1.0)</label>
+            <input type="number" id="cfg-gemini-temp" class="filter-input" step="0.1" min="0" max="1" placeholder="Ex: 0.7">
+          </div>
+        </div>
+
+        <div class="chart-card config-section">
+          <div class="chart-title">⏱️ Regras de Prospecção</div>
+          <div class="input-row">
+            <div class="input-group">
+              <label>Início (Hora)</label>
+              <input type="number" id="cfg-hora-inicio" class="filter-input" min="0" max="23" placeholder="Ex: 8">
+            </div>
+            <div class="input-group">
+              <label>Fim (Hora)</label>
+              <input type="number" id="cfg-hora-fim" class="filter-input" min="0" max="23" placeholder="Ex: 18">
+            </div>
+          </div>
+          <div class="input-row">
+            <div class="input-group">
+              <label>Cooldown (Dias para reenvio)</label>
+              <input type="number" id="cfg-cooldown" class="filter-input" min="1" placeholder="Ex: 30">
+            </div>
+            <div class="input-group">
+              <label>Limite Diário Max</label>
+              <input type="number" id="cfg-limite" class="filter-input" min="1" placeholder="Ex: 40">
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
