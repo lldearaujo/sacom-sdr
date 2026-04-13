@@ -10,6 +10,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./db');
 const cache = require('./cache');
 const media = require('./media');
+const whatsappInbound = require('./whatsapp-inbound');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -118,9 +119,18 @@ ${blocoIntent}
 
 // ─── CHAT COM RAG ─────────────────────────────────────────────────────────────
 
-async function processarMensagemRAG(lead, mensagemCliente) {
+async function processarMensagemRAG(lead, userInput) {
+  const userText =
+    typeof userInput === 'string' ? userInput : (userInput && userInput.text) || '';
+  const mediaParts =
+    typeof userInput === 'object' && userInput && Array.isArray(userInput.parts)
+      ? userInput.parts
+      : [];
+
+  const textoParaEmbedding = (userText.trim() || '(conteúdo multimodal)').slice(0, 8000);
+
   // 1. Monta o contexto injetado (System Instruction)
-  const systemInstructionText = await buildContextoRAG(lead, mensagemCliente);
+  const systemInstructionText = await buildContextoRAG(lead, textoParaEmbedding);
 
   // 2. Pega as últimas mensagens do histórico para manter a continuidade (via Redis/PG)
   const historico = await cache.getConversaContexto(lead.cnpj, RAG_HISTORICO_LIMITE);
@@ -158,12 +168,21 @@ async function processarMensagemRAG(lead, mensagemCliente) {
     },
   });
 
-  // 4. Envia mensagem para a IA
-  const result = await chat.sendMessage(mensagemCliente);
+  // 4. Envia mensagem para a IA (texto e/ou mídia multimodal)
+  let result;
+  if (mediaParts.length > 0) {
+    const prompt =
+      userText.trim() ||
+      'Analise o material enviado pelo cliente e responda no contexto da conversa BDR.';
+    result = await chat.sendMessage([{ text: prompt }, ...mediaParts]);
+  } else {
+    result = await chat.sendMessage(userText);
+  }
   const respostaCompleta = result.response.text();
 
   // 5. Salva mensagens no banco e no cache
-  await cache.appendMensagemConversa(lead.cnpj, 'user', mensagemCliente);
+  const historicoUser = whatsappInbound.textoParaHistorico(userInput);
+  await cache.appendMensagemConversa(lead.cnpj, 'user', historicoUser);
 
   // 6. Extrai intent e mídias [[MEDIA:chave]]
   const intentMatch = respostaCompleta.match(/<intent>([\s\S]+?)<\/intent>/);

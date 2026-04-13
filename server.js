@@ -14,6 +14,7 @@ const db = require('./server/db');
 const cache = require('./server/cache');
 const gemini = require('./server/gemini');
 const whatsapp = require('./server/whatsapp');
+const whatsappInbound = require('./server/whatsapp-inbound');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
@@ -219,12 +220,26 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
       return;
     }
     const payload = req.body;
-    console.log('\n[Webhook Z-API Recebido]', JSON.stringify({ phone: payload?.phone, fromMe: payload?.fromMe, type: payload?.type, msg: payload?.text?.message }));
+    console.log('\n[Webhook Z-API Recebido]', JSON.stringify({
+      phone: payload?.phone,
+      fromMe: payload?.fromMe,
+      type: payload?.type,
+      text: payload?.text?.message,
+      hasImage: !!payload?.image,
+      hasAudio: !!payload?.audio,
+      hasVideo: !!payload?.video,
+      hasDocument: !!payload?.document,
+    }));
 
-    if (!payload?.text?.message || payload.fromMe) return;
+    if (payload.fromMe) return;
+
+    const userContent = await whatsappInbound.buildUserContentFromPayload(payload);
+    if (!userContent) {
+      console.log('[Webhook] Nenhum texto ou mídia suportada para processar.');
+      return;
+    }
 
     const numero = (payload.phone || '').replace(/\\D/g, '');
-    const mensagem = payload.text.message;
 
     let cnpj = await whatsapp.encontrarCnpjPorNumero(numero);
     let lead = await db.getLeadByCnpj(cnpj);
@@ -257,7 +272,7 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     console.log(`[Webhook] Processando mensagem para: ${lead.razao} (${cnpj})`);
 
     // 🤖 Gemini processa via engine RAG
-    const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(lead, mensagem);
+    const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(lead, userContent);
 
     // Salva intent se detectado
     if (intent?.interesse) {
