@@ -976,13 +976,28 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
       if (match) cnpj = match.cnpj;
     }
 
-    if (!cnpj) {
+    let lead  = leads.find((l) => l.cnpj === cnpj);
+
+    // [MODO TESTE] Verifica se é um número autorizado em .env
+    const numerosAutorizados = (process.env.NUMEROS_TESTE || '').split(',').map(n => n.replace(/\D/g, '')).filter(n => n.length > 5);
+    const ehNumeroTeste = numerosAutorizados.some(nt => numero.includes(nt) || nt.includes(numero.substring(2)));
+
+    if (!lead && ehNumeroTeste) {
+       console.log(`[Webhook] MODO TESTE DE DIRETORIA: Autorizando ${numero} para interagir com a IA.`);
+       cnpj = '00000000000000'; // CNPJ Fictício para salvar o histórico da conversa
+       lead = {
+         cnpj, razao: 'Usuário de Testes Internos', fantasia: 'Empresa Teste', cidade: 'Brasil',
+         segmento: 'Testes de Validação', dorPrincipal: 'Testar e validar comportamento da IA BDR',
+         ofertaPrincipal: 'Midia Exterior e OOH', classificacao: '🔴 HOT'
+       };
+       // Registramos o cache "fake" para que a biblioteca de conversas o encontre na memóia
+       if (!cache[cnpj]) { cache[cnpj] = { status: 'respondido', numero }; whatsapp.saveProspeccao(cache); }
+    }
+
+    if (!lead) {
        console.log(`[Webhook] IGNORADO: O número ${numero} enviou mensagem, mas não está registrado em nenhum arquivo de Leads.`);
        return;
     }
-
-    const lead  = leads.find((l) => l.cnpj === cnpj);
-    if (!lead) return;
 
     console.log(`[Webhook] Processando mensagem para o Lead: ${lead.razao} (${cnpj})`);
 
@@ -1064,7 +1079,7 @@ app.get('/api/config', (req, res) => {
     console.warn('Erro ao ler .env', err);
   }
 
-  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO'];
+  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE'];
   const responseConfig = {};
   keys.forEach(k => {
     responseConfig[k] = config[k] !== undefined ? config[k] : (process.env[k] || '');

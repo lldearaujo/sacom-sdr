@@ -752,6 +752,7 @@ async function initConfigView() {
     document.getElementById('cfg-hora-fim').value = config.PROSPECCAO_HORA_FIM || '';
     document.getElementById('cfg-cooldown').value = config.PROSPECCAO_COOLDOWN_DIAS || '';
     document.getElementById('cfg-limite').value = config.PROSPECCAO_LIMITE_DIARIO || '';
+    document.getElementById('cfg-numeros-teste').value = config.NUMEROS_TESTE || '';
   } catch (err) {
     showMsg('Erro ao carregar configurações: ' + err.message, 'error');
   }
@@ -774,7 +775,8 @@ async function initConfigView() {
       PROSPECCAO_HORA_INICIO: document.getElementById('cfg-hora-inicio').value,
       PROSPECCAO_HORA_FIM: document.getElementById('cfg-hora-fim').value,
       PROSPECCAO_COOLDOWN_DIAS: document.getElementById('cfg-cooldown').value,
-      PROSPECCAO_LIMITE_DIARIO: document.getElementById('cfg-limite').value
+      PROSPECCAO_LIMITE_DIARIO: document.getElementById('cfg-limite').value,
+      NUMEROS_TESTE: document.getElementById('cfg-numeros-teste').value
     };
 
     btnSalvar.disabled = true;
