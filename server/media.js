@@ -132,17 +132,38 @@ ${lines.join('\n')}
  */
 function extrairMidiasDaResposta(texto) {
   if (!texto) return { texto: '', mediaKeys: [] };
-  const tag = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
+  
+  const tagRegex = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
   const mediaKeys = [];
-  let m;
-  while ((m = tag.exec(texto)) !== null) mediaKeys.push(m[1]);
+  let processado = texto;
 
-  const textoSem = texto
-    .replace(/\[\[MEDIA:[a-zA-Z0-9_-]+\]\]/g, '')
+  // Encontra todas as ocorrências
+  let match;
+  while ((match = tagRegex.exec(texto)) !== null) {
+    const key = match[1];
+    mediaKeys.push(key);
+    
+    // Tenta resolver o link para colocar no texto
+    const resolved = resolveMediaUrl(key);
+    let substituto = '';
+    
+    if (resolved && resolved.url) {
+      substituto = `\n\n🔗 *Link do material:* ${resolved.url}\n`;
+    } else {
+      // Fallback caso a PUBLIC_BASE_URL não esteja configurada
+      substituto = `\n\n📁 [Arquivo: ${key} disponíveis para envio]\n`;
+    }
+    
+    // Substitui a tag específica no texto processado
+    processado = processado.replace(`[[MEDIA:${key}]]`, substituto);
+  }
+
+  // Limpeza final de espaços redundantes
+  const textoFinal = processado
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  return { texto: textoSem, mediaKeys };
+  return { texto: textoFinal, mediaKeys };
 }
 
 module.exports = {
