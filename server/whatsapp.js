@@ -151,6 +151,8 @@ async function zapiPost(suffixPath, body) {
  */
 async function enviarMidia(numero, { type, url, caption, fileName }) {
   const phone = numero;
+  console.log(`[Z-API] Tentando enviar mídia: tipo=${type}, url=${url}`);
+  
   switch (type) {
     case 'image':
       return zapiPost('/send-image', { phone, image: url, caption: caption || '', viewOnce: false });

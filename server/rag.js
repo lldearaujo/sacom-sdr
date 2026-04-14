@@ -211,9 +211,15 @@ async function processarMensagemRAG(lead, userInput) {
   await cache.appendMensagemConversa(lead.cnpj, 'user', historicoUser);
 
   // 6. Extrai intent e mídias [[MEDIA:chave]]
-  const intentMatch = respostaCompleta.match(/<intent>([\s\S]+?)<\/intent>/);
+  // Regex global (/g) e case-insensitive (/i) para garantir remoção total
+  const intentMatch = respostaCompleta.match(/<intent>([\s\S]+?)<\/intent>/i);
   let intent = null;
-  const semIntent = respostaCompleta.replace(/<intent>[\s\S]*?<\/intent>/, '').trim();
+  
+  // Limpa todas as tags <intent>...</intent> e também tags órfãs se houver
+  const semIntent = respostaCompleta
+    .replace(/<intent>[\s\S]*?<\/intent>/gi, '')
+    .replace(/<intent>|<\/intent>/gi, '') // Camada extra de limpeza para tags mal formadas
+    .trim();
 
   if (intentMatch) {
     try { intent = JSON.parse(intentMatch[1]); } catch { /* ignora */ }
