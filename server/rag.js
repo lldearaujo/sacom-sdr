@@ -78,9 +78,9 @@ async function buildContextoRAG(lead, mensagemCliente) {
   const perfilSintetico = `
 ## Lead
 ${trunc(lead.fantasia || lead.razao, 80)} · ${trunc(lead.cidade || '', 40)} | ${trunc(lead.cnae || 'Variado', 80)}
+Status: ${lead.etapaFunil || 'Qualificação'} (Score BDR: ${lead.scoreComercial || 0}/40)
 Dor: ${trunc(lead.dor_principal || lead.dorPrincipal || 'Atrair clientes', RAG_PERFIL_CAMPO_MAX)}
-Oferta: ${trunc(lead.oferta_principal || lead.ofertaPrincipal || 'OOH Geral', RAG_PERFIL_CAMPO_MAX)}
-Pitch: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local', RAG_PERFIL_CAMPO_MAX)}
+Pitch sugerido: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre valor local', RAG_PERFIL_CAMPO_MAX)}
 `;
 
   // 4. Combina com o Base System Prompt Configurável
@@ -89,14 +89,19 @@ Pitch: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo || 'Mostre va
 
   const objetivoConversa =
     readEnvMultiline('BDR_OBJETIVO_CONVERSA').trim() ||
-    'Agendar apresentação/reunião.';
+    'Qualificar o lead (BANT) e gerar valor/curiosidade. Responder dúvidas com a KB.';
 
   // Se o Prompt não foi configurado na UI ainda, usamos o padrão (compacto).
   let promptCustomizado = process.env.BDR_SYSTEM_PROMPT;
   const usaPromptPadraoInterno = !promptCustomizado || promptCustomizado.trim().length === 0;
   if (usaPromptPadraoInterno) {
-    promptCustomizado = `{{agente}}, {{cargo}} · SA Comunicação (Cajazeiras/PB). Mix: DOOH LED, outdoor, rádio, marketing.
-WhatsApp humano: 2–4 blocos curtos (linha em branco entre eles), sem tom de e-mail. Objetivo: ${objetivoConversa}`;
+    promptCustomizado = `Você é {{agente}}, {{cargo}} na SA Comunicação (Cajazeiras/PB). Especialista em OOH, rádio e digital.
+DIRETRIZES:
+1. Tom humano, sem "clichês de vendedor". WhatsApp: 2-3 blocos curtos.
+2. FOCO: Educação e Consultoria. Não empurre a reunião no primeiro contato ou se o lead ainda tiver dúvidas básicas.
+3. REUNIÃO: Só peça se o lead mostrar interesse real em avançar ou se você já tiver respondido as dúvidas dele e o score for > 20.
+4. Se perguntar preço/como funciona: Explique brevemente (use KB) e gere curiosidade sobre o impacto no negócio dele.
+Objetivo: ${objetivoConversa}`;
   }
 
   // Substitui tags
