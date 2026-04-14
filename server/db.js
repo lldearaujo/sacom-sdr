@@ -221,7 +221,8 @@ async function bootstrapSystem() {
   // 1. Sincroniza Configurações (Settings -> process.env)
   const settings = await getSettings();
   Object.keys(settings).forEach(key => {
-    if (settings[key]) {
+    // Só carrega do banco se não estiver definido no ambiente (Ex: Easypanel tem prioridade)
+    if (settings[key] && !process.env[key]) {
       process.env[key] = settings[key];
     }
   });
