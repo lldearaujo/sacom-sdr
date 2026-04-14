@@ -498,17 +498,7 @@ app.delete('/api/knowledge/:id', async (req, res) => {
 
 // ─── Media Catalog Management API ─────────────────────────────────────────────
 
-const mediaStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, 'public', 'media'));
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const name = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
-    cb(null, `${Date.now()}_${name}${ext}`);
-  }
-});
-const uploadMedia = multer({ storage: mediaStorage });
+const uploadMedia = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
@@ -516,14 +506,27 @@ app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
     const { key, type, caption, descricao } = req.body;
     if (!key) return res.status(400).json({ error: 'A chave da mídia é obrigatória.' });
 
+    // Gera um nome de arquivo seguro similar ao diskStorage anterior
+    const ext = path.extname(req.file.originalname);
+    const safeName = path.basename(req.file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `${Date.now()}_${safeName}${ext}`;
+    
+    // Caminho da pasta física
+    const mediaDir = path.join(__dirname, 'public', 'media');
+    if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+    
+    // Grava no disco
+    fs.writeFileSync(path.join(mediaDir, filename), req.file.buffer);
+
     const entry = {
-      file: req.file.filename,
+      file: filename,
       type: type || 'document',
       fileName: req.file.originalname,
       caption: caption || '',
       descricao: descricao || ''
     };
 
+    // Salva no banco (Passando o buffer agora que usamos memoryStorage)
     const result = await mediaMod.saveMedia(key, entry, req.file.buffer);
     res.json({ ok: true, key, entry: result });
   } catch (err) {
