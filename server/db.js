@@ -7,12 +7,20 @@
 
 const { Pool } = require('pg');
 
+const dbUrl = (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('outdoora_sacom-postgres') && process.env.DATABASE_URL_EXTERNAL)
+  ? process.env.DATABASE_URL_EXTERNAL
+  : process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: dbUrl,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
+
+if (dbUrl === process.env.DATABASE_URL_EXTERNAL) {
+  console.log('📡 Usando DATABASE_URL_EXTERNAL para conexão PostgreSQL.');
+}
 
 // ─── Inicialização — cria tabelas e extensão vector ───────────────────────────
 async function init() {

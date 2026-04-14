@@ -8,13 +8,21 @@
 const Redis = require('ioredis');
 const db = require('./db');
 
-const redis = new Redis(process.env.REDIS_URL, {
+const redisUrl = (process.env.REDIS_URL && process.env.REDIS_URL.includes('outdoora_sacom-redis') && process.env.REDIS_URL_EXTERNAL)
+  ? process.env.REDIS_URL_EXTERNAL
+  : process.env.REDIS_URL;
+
+const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: 1,
   retryStrategy(times) {
     if (times > 3) return null; // Para de tentar após 3 vezes (usa fallback)
     return Math.min(times * 100, 3000);
   },
 });
+
+if (redisUrl === process.env.REDIS_URL_EXTERNAL) {
+  console.log('📡 Usando REDIS_URL_EXTERNAL para cache.');
+}
 
 redis.on('error', (err) => {
   console.warn('⚠️ Erro no Redis (usando fallback PostgreSQL):', err.message);
