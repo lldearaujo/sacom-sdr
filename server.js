@@ -478,6 +478,51 @@ app.delete('/api/knowledge/:id', async (req, res) => {
   }
 });
 
+// ─── Media Catalog Management API ─────────────────────────────────────────────
+
+const mediaStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, 'public', 'media'));
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9]/g, '_');
+    cb(null, `${Date.now()}_${name}${ext}`);
+  }
+});
+const uploadMedia = multer({ storage: mediaStorage });
+
+app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+  try {
+    const { key, type, caption, descricao } = req.body;
+    if (!key) return res.status(400).json({ error: 'A chave da mídia é obrigatória.' });
+
+    const entry = {
+      file: req.file.filename,
+      type: type || 'document',
+      fileName: req.file.originalname,
+      caption: caption || '',
+      descricao: descricao || ''
+    };
+
+    const result = mediaMod.saveMedia(key, entry);
+    res.json({ ok: true, key, entry: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/media/:key', async (req, res) => {
+  try {
+    const success = mediaMod.deleteMedia(req.params.key, true);
+    if (!success) return res.status(404).json({ error: 'Mídia não encontrada no catálogo.' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // INIT & START SERVER
 // ══════════════════════════════════════════════════════════════════════════════

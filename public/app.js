@@ -945,6 +945,99 @@ async function initConfigView() {
   });
 
   loadKnowledgeBase();
+  loadMediaCatalog();
+
+  // Gerenciamento de Mídia
+  const mediaFileInput = document.getElementById('media-file');
+  const mediaStatus = document.getElementById('media-upload-status');
+
+  mediaFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const key = document.getElementById('media-key').value.trim();
+    if (!key) {
+      alert('Por favor, informe uma Chave Única para o arquivo (ex: tabela_precos)');
+      mediaFileInput.value = '';
+      return;
+    }
+
+    const type = document.getElementById('media-type').value;
+    const desc = document.getElementById('media-desc').value.trim();
+    const caption = document.getElementById('media-caption').value.trim();
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('key', key);
+    formData.append('type', type);
+    formData.append('descricao', desc);
+    formData.append('caption', caption);
+
+    mediaStatus.style.color = 'var(--text-light)';
+    mediaStatus.textContent = '📤 Enviando mídia...';
+
+    try {
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro no upload');
+
+      mediaStatus.style.color = '#34d399';
+      mediaStatus.textContent = `✅ Mídia "${key}" cadastrada com sucesso!`;
+      
+      // Limpar campos
+      document.getElementById('media-key').value = '';
+      document.getElementById('media-desc').value = '';
+      document.getElementById('media-caption').value = '';
+      
+      loadMediaCatalog();
+    } catch(err) {
+      mediaStatus.style.color = '#f87171';
+      mediaStatus.textContent = `❌ Falha: ${err.message}`;
+    } finally {
+      mediaFileInput.value = '';
+    }
+  });
+}
+
+async function loadMediaCatalog() {
+  const container = document.getElementById('media-list');
+  try {
+    const res = await fetchJson('/api/media/catalog');
+    if (!res.entries || res.entries.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">Nenhum arquivo no catálogo.</p>';
+      return;
+    }
+
+    container.innerHTML = res.entries.map(item => `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); padding: 12px 0;">
+        <div style="flex:1; margin-right: 12px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-weight:700; color:var(--accent); font-size:13px;">[[MEDIA:${item.key}]]</span>
+            <span class="badge ${item.type === 'document' ? 'cool' : 'warm'}" style="font-size:9px;">${item.type.toUpperCase()}</span>
+          </div>
+          <div style="font-weight:600; color:var(--text-light); font-size:13px; margin-top:4px;">${item.fileName}</div>
+          ${item.descricao ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${item.descricao}</div>` : ''}
+        </div>
+        <button class="btn btn-close" style="color:#ef4444; font-size: 14px;" onclick="deleteMedia('${item.key}')">🗑️</button>
+      </div>
+    `).join('');
+  } catch(err) {
+    container.innerHTML = '<p style="color:#ef4444; font-size: 13px;">Erro ao carregar catálogo.</p>';
+  }
+}
+
+async function deleteMedia(key) {
+  if (!confirm(`Deseja remover a mídia "${key}" do catálogo? O arquivo físico também será excluído.`)) return;
+  try {
+    const res = await fetch(`/api/media/${key}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Erro ao deletar mídia');
+    loadMediaCatalog();
+  } catch(err) {
+    alert(err.message);
+  }
 }
 
 async function loadKnowledgeBase() {

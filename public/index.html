@@ -406,6 +406,49 @@
           </div>
         </div>
       </div>
+
+      <div class="section-header" style="margin-top: 32px;">📂 Material de Apoio (Imagens, PDFs, Vídeos)</div>
+      
+      <div class="config-grid">
+        <div class="chart-card config-section">
+          <div class="chart-title">Adicionar Nova Mídia</div>
+          <div class="input-group">
+            <label>Chave Única (ex: tabela_precos)</label>
+            <input type="text" id="media-key" class="filter-input" placeholder="Sem espaços, use sublinhado">
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <div class="input-group">
+              <label>Tipo de Arquivo</label>
+              <select id="media-type" class="filter-select">
+                <option value="document">Documento (PDF/Word)</option>
+                <option value="image">Imagem (JPG/PNG)</option>
+                <option value="video">Vídeo (MP4)</option>
+                <option value="audio">Áudio (MP3/OGG)</option>
+              </select>
+            </div>
+          </div>
+          <div class="input-group" style="margin-top: 10px;">
+            <label>Descrição para a IA (ex: Catálogo de cores 2024)</label>
+            <input type="text" id="media-desc" class="filter-input" placeholder="Para que serve este arquivo?">
+          </div>
+          <div class="input-group" style="margin-top: 10px;">
+            <label>Legenda (opcional)</label>
+            <input type="text" id="media-caption" class="filter-input" placeholder="Aparece abaixo da imagem/vídeo">
+          </div>
+          <div style="margin-top: 16px; border: 1px dashed var(--border-color); padding: 16px; border-radius: 8px; text-align: center;">
+            <input type="file" id="media-file" style="display: none;" />
+            <button class="btn btn-primary" onclick="document.getElementById('media-file').click()" style="width: 100%;">Selecionar e Enviar Arquivo</button>
+            <div id="media-upload-status" style="margin-top: 8px; font-size: 12px; font-weight: 500;"></div>
+          </div>
+        </div>
+
+        <div class="chart-card config-section">
+          <div class="chart-title">Catálogo de Mídias Ativas</div>
+          <div id="media-list" style="max-height: 400px; overflow-y: auto;">
+             <p style="color: var(--text-muted); font-size: 13px;">Carregando...</p>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ── LOGS VIEW ── -->

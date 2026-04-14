@@ -66,6 +66,44 @@ function resolveMediaUrl(key) {
 }
 
 /**
+ * Salva ou atualiza uma mídia no catálogo.
+ */
+function saveMedia(key, entry) {
+  if (!key || typeof key !== 'string') throw new Error('Chave inválida');
+  const m = loadManifest();
+  m[key] = {
+    file: entry.file,
+    type: entry.type,
+    fileName: entry.fileName || entry.file,
+    caption: entry.caption || '',
+    descricao: entry.descricao || '',
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), 'utf8');
+  return m[key];
+}
+
+/**
+ * Remove uma mídia do catálogo e opcionalmente apaga o arquivo físico.
+ */
+function deleteMedia(key, deleteFile = true) {
+  const m = loadManifest();
+  const entry = m[key];
+  if (!entry) return false;
+
+  if (deleteFile && entry.file) {
+    const full = path.join(PUBLIC_MEDIA_DIR, entry.file);
+    if (fs.existsSync(full)) {
+      try { fs.unlinkSync(full); } catch (e) { console.warn('Falha ao deletar arquivo físico:', e.message); }
+    }
+  }
+
+  delete m[key];
+  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), 'utf8');
+  return true;
+}
+
+/**
  * Texto para injetar no system prompt (lista de chaves).
  */
 function blocoPromptMidia() {
@@ -113,4 +151,6 @@ module.exports = {
   blocoPromptMidia,
   extrairMidiasDaResposta,
   fileExistsInPublicMedia,
+  saveMedia,
+  deleteMedia,
 };
