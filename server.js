@@ -567,7 +567,7 @@ async function startServer() {
   
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✅ SA Comunicação - RAG + PGVector + Redis rodando em http://0.0.0.0:${PORT}`);
-    console.log(`   🤖 Gemini AI: ${process.env.GEMINI_MODEL || 'gemini-2.0-flash'}`);
+    console.log(`   🤖 Gemini AI: ${process.env.GEMINI_MODEL || 'gemini-1.5-flash'}`);
     console.log(`   📱 Z-API: ${process.env.ZAPI_INSTANCE_ID ? 'configurada' : 'não configurada'}\n`);
   });
 }

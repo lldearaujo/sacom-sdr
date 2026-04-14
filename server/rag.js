@@ -197,7 +197,7 @@ async function processarMensagemRAG(lead, userInput) {
 
   // 3. Inicializa modelo
   const chatModel = genAI.getGenerativeModel({
-    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
     generationConfig: {
       maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '768', 10),
       temperature: parseFloat(process.env.GEMINI_TEMPERATURA || '0.7'),
