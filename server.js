@@ -67,18 +67,22 @@ app.get('/api/system/logs', (req, res) => {
 });
 
 const mediaMod = require('./server/media');
-app.get('/api/media/catalog', (req, res) => {
-  const m = mediaMod.loadManifest();
-  const entries = Object.entries(m)
-    .filter(([k]) => !k.startsWith('_'))
-    .map(([k, v]) => ({
-      key: k,
-      type: v && v.type,
-      file: v && v.file,
-      fileName: (v && v.fileName) || (v && v.file),
-      descricao: (v && v.descricao) || '',
-    }));
-  res.json({ entries });
+app.get('/api/media/catalog', async (req, res) => {
+  try {
+    const m = await mediaMod.loadManifest();
+    const entries = Object.entries(m)
+      .filter(([k]) => !k.startsWith('_'))
+      .map(([k, v]) => ({
+        key: k,
+        type: v && v.type,
+        file: v && v.file,
+        fileName: (v && v.fileName) || (v && v.file),
+        descricao: (v && v.descricao) || '',
+      }));
+    res.json({ entries });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/leads', async (req, res) => {
@@ -375,7 +379,7 @@ app.get('/api/config', (req, res) => {
   res.json(responseConfig);
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', async (req, res) => {
   try {
     const envPath = path.join(__dirname, '.env');
     let lines = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n') : [];
@@ -523,7 +527,7 @@ app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
 
 app.delete('/api/media/:key', async (req, res) => {
   try {
-    const success = mediaMod.deleteMedia(req.params.key, true);
+    const success = await mediaMod.deleteMedia(req.params.key, true);
     if (!success) return res.status(404).json({ error: 'Mídia não encontrada no catálogo.' });
     res.json({ ok: true });
   } catch (err) {
