@@ -129,7 +129,7 @@ Objetivo: ${objetivoConversa}`;
   const intentPadrao = `Ao final da resposta, se houver qualquer sinal de evolução na conversa, inclua obrigatoriamente a tag:
 <intent>{
   "interesse": true|false,
-  "tipo": "agendamento|proposta|duvida|negativa",
+  "tipo": "agendamento|proposta|fechamento|duvida|negativa",
   "urgencia": "alta|media|baixa",
   "sugestao_score": 0-40,
   "sugestao_etapa": "Qualificação|Apresentação|Negociação|Fechamento",
@@ -223,6 +223,11 @@ async function processarMensagemRAG(lead, userInput) {
     result = await chat.sendMessage(userText);
   }
   const respostaCompleta = result.response.text();
+  
+  // Debug para truncamento: logar resposta bruta se for menor que o esperado ou terminar de forma estranha
+  if (respostaCompleta.length < 100 || !respostaCompleta.includes('</intent>')) {
+    console.log(`[Gemini Debug] Resposta bruta (${respostaCompleta.length} chars): ${respostaCompleta}`);
+  }
 
   // 5. Salva mensagens no banco e no cache
   const historicoUser = whatsappInbound.textoParaHistorico(userInput);
@@ -244,11 +249,20 @@ async function processarMensagemRAG(lead, userInput) {
   }
 
   const { texto: respostaLimpa, mediaKeys } = await media.extrairMidiasDaResposta(semIntent);
+  let finalResponse = respostaLimpa;
+
+  // 7. Lógica de Handoff Humano (Se detectou intenção de fechamento)
+  if (intent && intent.tipo === 'fechamento') {
+    const contatoHumano = process.env.BDR_CONTATO_HUMANO || '8335313352';
+    const handoffMsg = `\n\n👉 Para formalizar e fechar o negócio agora, fale com nossa equipe financeira/comercial neste link: https://wa.me/55${contatoHumano.replace(/\D/g, '')}`;
+    finalResponse += handoffMsg;
+    console.log(`🤝 HANDOFF: Lead ${lead.cnpj} pronto para fechamento. Encaminhando para ${contatoHumano}`);
+  }
 
   // Salva no histórico só o texto exibido ao lead (sem tags internas)
-  await cache.appendMensagemConversa(lead.cnpj, 'model', respostaLimpa);
+  await cache.appendMensagemConversa(lead.cnpj, 'model', finalResponse);
 
-  return { resposta: respostaLimpa, intent, mediaKeys };
+  return { resposta: finalResponse, intent, mediaKeys };
 }
 
 module.exports = {

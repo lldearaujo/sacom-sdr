@@ -315,8 +315,14 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
         const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(leadCtx, userInput);
 
         if (intent?.interesse) {
-          console.log(`🔥 OPORTUNIDADE: ${leadCtx.razao} (${leadCtx.cidade}) — ${intent.tipo}`);
-          await db.saveProspeccaoDB(cnpjCtx, { status: intent.urgencia === 'alta' ? 'oportunidade' : 'respondido' });
+          const type = intent.tipo || 'oportunidade';
+          const isFechamento = type === 'fechamento';
+          console.log(`${isFechamento ? '🤝 CONVERSÃO' : '🔥 OPORTUNIDADE'}: ${leadCtx.razao} (${leadCtx.cidade}) — ${type}`);
+          
+          let newStatus = intent.urgencia === 'alta' ? 'oportunidade' : 'respondido';
+          if (isFechamento) newStatus = 'convertido';
+          
+          await db.saveProspeccaoDB(cnpjCtx, { status: newStatus });
         }
 
         await new Promise((r) => setTimeout(r, 800 + Math.random() * 1400));
