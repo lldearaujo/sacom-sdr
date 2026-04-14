@@ -243,7 +243,7 @@ async function processarMensagemRAG(lead, userInput) {
     try { intent = JSON.parse(intentMatch[1]); } catch { /* ignora */ }
   }
 
-  const { texto: respostaLimpa, mediaKeys } = media.extrairMidiasDaResposta(semIntent);
+  const { texto: respostaLimpa, mediaKeys } = await media.extrairMidiasDaResposta(semIntent);
 
   // Salva no histórico só o texto exibido ao lead (sem tags internas)
   await cache.appendMensagemConversa(lead.cnpj, 'model', respostaLimpa);
