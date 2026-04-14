@@ -773,6 +773,15 @@ module.exports = {
   encontrarCnpjPorNumeroDB,
   // analytics
   getStats,
+  // system & persistence
+  bootstrapSystem,
+  saveSetting,
+  getSettings,
+  // media catalog
+  saveMediaEntry,
+  getMediaCatalog,
+  getMediaFile,
+  deleteMediaEntry,
   // knowledge base
   saveKnowledge,
   searchKnowledge,
