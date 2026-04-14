@@ -391,7 +391,15 @@ app.post('/api/config', (req, res) => {
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         value = String(value);
       }
+      
+      // Salva no process.env (runtime)
       process.env[key] = value;
+      
+      // Salva no PostgreSQL (persistência definitiva)
+      if (dbReady) {
+        await db.saveSetting(key, value).catch(e => console.error(`Erro ao salvar ${key} no PG:`, e.message));
+      }
+
       const idx = lines.findIndex(l => l.startsWith(`${key}=`));
       if (idx !== -1) lines[idx] = `${key}=${value}`;
       else lines.push(`${key}=${value}`);
@@ -506,7 +514,7 @@ app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
       descricao: descricao || ''
     };
 
-    const result = mediaMod.saveMedia(key, entry);
+    const result = await mediaMod.saveMedia(key, entry, req.file.buffer);
     res.json({ ok: true, key, entry: result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -531,6 +539,13 @@ async function startServer() {
   try {
     await db.init();
     dbReady = true;
+    
+    // Bootstrap: Recupera tudo que está no Banco (Configs e Arquivos)
+    // Isso evita perda de dados em ambientes efêmeros (Easypanel/Docker)
+    await db.bootstrapSystem().catch(err => {
+      console.error('⚠️ Falha no bootstrap de dados:', err.message);
+    });
+
   } catch (err) {
     dbReady = false;
     console.error('⚠️ Banco indisponível. Subindo API em modo degradado.', err.message);

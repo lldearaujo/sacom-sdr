@@ -91,27 +91,40 @@ Pitch sugerido: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo || '
     readEnvMultiline('BDR_OBJETIVO_CONVERSA').trim() ||
     'Qualificar o lead (BANT) e gerar valor/curiosidade. Responder dúvidas com a KB.';
 
+  // Lógica de "Paciência Comercial": bloqueia reunião se o lead for frio
+  let diretrizStatus = '';
+  const score = lead.scoreComercial || 0;
+  const etapa = lead.etapaFunil || 'Qualificação';
+  
+  if (etapa === 'Qualificação' || score < 25) {
+      diretrizStatus = `\nSTATUS DO LEAD: EM QUALIFICAÇÃO (Frio). 
+⚠️ REGRA CRÍTICA: Você está PROIBIDO de sugerir reuniões, call de 15 min ou pedir horários agora. 
+Sua missão é APENAS responder dúvidas, enviar mídias se solicitado e entender a dor do cliente. NÃO force o fechamento ainda.`;
+  } else {
+      diretrizStatus = `\nSTATUS DO LEAD: PRONTO (Quente). 
+Pode sugerir uma conversa breve se sentir que as dúvidas foram sanadas.`;
+  }
+
   // Se o Prompt não foi configurado na UI ainda, usamos o padrão (compacto).
   let promptCustomizado = process.env.BDR_SYSTEM_PROMPT;
   const usaPromptPadraoInterno = !promptCustomizado || promptCustomizado.trim().length === 0;
   if (usaPromptPadraoInterno) {
-    promptCustomizado = `Você é {{agente}}, {{cargo}} na SA Comunicação (Cajazeiras/PB). Especialista em OOH, rádio e digital.
-DIRETRIZES:
-1. Tom humano, sem "clichês de vendedor". WhatsApp: 2-3 blocos curtos.
-2. FOCO: Educação e Consultoria. Não empurre a reunião no primeiro contato ou se o lead ainda tiver dúvidas básicas.
-3. REUNIÃO: Só peça se o lead mostrar interesse real em avançar ou se você já tiver respondido as dúvidas dele e o score for > 20.
-4. Se perguntar preço/como funciona: Explique brevemente (use KB) e gere curiosidade sobre o impacto no negócio dele.
+    promptCustomizado = `Você é {{agente}}, {{cargo}} na SA Comunicação (Cajazeiras/PB). 
+DIRETRIZES GERAIS:
+1. Tom humano, WhatsApp: 2-3 blocos curtos.
+2. Seja um consultor, não um vendedor de telemarketing.
+3. Se perguntar preço/como funciona: Explique via KB e gere curiosidade.
+${diretrizStatus}
 Objetivo: ${objetivoConversa}`;
+  } else {
+      // Se houver prompt customizado, injetamos a diretriz de status no final para garantir obediência
+      promptCustomizado += `\n\n${diretrizStatus}`;
   }
 
   // Substitui tags
   let promptInjetado = promptCustomizado
     .replace(/\{\{agente\}\}/g, agente)
     .replace(/\{\{cargo\}\}/g, cargo);
-  // Compatibilidade caso usem ${agente} no text area:
-  promptInjetado = promptInjetado
-    .replace(/\$\{agente\}/g, agente)
-    .replace(/\$\{cargo\}/g, cargo);
 
   const intentPadrao = `Ao final da resposta, se houver qualquer sinal de evolução na conversa, inclua obrigatoriamente a tag:
 <intent>{
@@ -132,7 +145,7 @@ Critérios Retomada (BANT/Score):
   const intentCustom = readEnvMultiline('BDR_INTENT_DETECCAO').trim();
   const blocoIntent = intentCustom.length > 0 ? intentCustom : intentPadrao;
 
-  const blocoMidia = media.blocoPromptMidia();
+  const blocoMidia = await media.blocoPromptMidia();
 
   // Evita repetir instruções de estilo quando o prompt padrão já as inclui (economiza tokens).
   const blocoEstiloWhats = usaPromptPadraoInterno

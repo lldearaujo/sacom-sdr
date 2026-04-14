@@ -126,6 +126,27 @@ async function init() {
       );
     `);
 
+    // Nova tabela para configurações persistentes
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key           TEXT PRIMARY KEY,
+        value         TEXT,
+        atualizado_em TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // Nova tabela para catálogo de mídias (incluindo o binário do arquivo)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS media_catalog_db (
+        key           TEXT PRIMARY KEY,
+        filename      TEXT NOT NULL,
+        type          TEXT NOT NULL,
+        file_data     BYTEA NOT NULL,
+        metadata      JSONB,
+        criado_em     TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // Índice vetorial — só criado se já houver linhas
     const { rows } = await client.query('SELECT COUNT(*) FROM leads WHERE embedding IS NOT NULL');
     if (parseInt(rows[0].count) >= 100) {
@@ -138,6 +159,94 @@ async function init() {
     console.log('✅ PostgreSQL + pgvector inicializado');
   } finally {
     client.release();
+  }
+}
+
+// ─── CONFIGURAÇÕES PERSISTENTES ──────────────────────────────────────────────
+
+async function getSettings() {
+  const { rows } = await pool.query('SELECT key, value FROM system_settings');
+  const settings = {};
+  rows.forEach(r => settings[r.key] = r.value);
+  return settings;
+}
+
+async function saveSetting(key, value) {
+  await pool.query(`
+    INSERT INTO system_settings (key, value, atualizado_em)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, atualizado_em = NOW()
+  `, [key, value]);
+}
+
+// ─── CATÁLOGO DE MÍDIAS (POSTGRES) ───────────────────────────────────────────
+
+async function saveMediaEntry(key, filename, type, fileBuffer, metadata = {}) {
+  await pool.query(`
+    INSERT INTO media_catalog_db (key, filename, type, file_data, metadata)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (key) DO UPDATE SET
+      filename = EXCLUDED.filename,
+      type = EXCLUDED.type,
+      file_data = EXCLUDED.file_data,
+      metadata = EXCLUDED.metadata
+  `, [key, filename, type, fileBuffer, JSON.stringify(metadata)]);
+}
+
+async function getMediaCatalog() {
+  // Retorna apenas metadados, sem o binário (para performance)
+  const { rows } = await pool.query('SELECT key, filename, type, metadata FROM media_catalog_db');
+  return rows;
+}
+
+async function getMediaFile(key) {
+  const { rows } = await pool.query('SELECT * FROM media_catalog_db WHERE key = $1', [key]);
+  return rows[0] || null;
+}
+
+async function deleteMediaEntry(key) {
+  await pool.query('DELETE FROM media_catalog_db WHERE key = $1', [key]);
+}
+
+/**
+ * Recria o ambiente (configs e arquivos) a partir do banco.
+ * Crucial para rodar no Easypanel sem volumes persistentes.
+ */
+async function bootstrapSystem() {
+  const fs = require('fs');
+  const path = require('path');
+  
+  console.log('🔄 Iniciando Bootstrap do Sistema...');
+
+  // 1. Sincroniza Configurações (Settings -> process.env)
+  const settings = await getSettings();
+  Object.keys(settings).forEach(key => {
+    if (settings[key]) {
+      process.env[key] = settings[key];
+    }
+  });
+  console.log(`   ✅ ${Object.keys(settings).length} configurações carregadas do banco.`);
+
+  // 2. Sincroniza Mídias (DB -> public/media/)
+  const mediaDir = path.join(__dirname, '..', 'public', 'media');
+  if (!fs.existsSync(mediaDir)) {
+    fs.mkdirSync(mediaDir, { recursive: true });
+  }
+
+  const { rows: mediaRows } = await pool.query('SELECT key, filename, file_data FROM media_catalog_db');
+  let restored = 0;
+  for (const row of mediaRows) {
+    const filePath = path.join(mediaDir, row.filename);
+    // Só restaura se o arquivo não existir fisicamente (ex: após rebuild)
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, row.file_data);
+      restored++;
+    }
+  }
+  if (restored > 0) {
+    console.log(`   ✅ ${restored} arquivos de mídia restaurados do banco de dados.`);
+  } else {
+    console.log('   ℹ️ Nenhum arquivo de mídia precisou de restauração.');
   }
 }
 

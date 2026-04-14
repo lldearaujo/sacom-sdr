@@ -1,31 +1,34 @@
 'use strict';
 
+const db = require('./db');
+
 /**
- * Catálogo de mídia para WhatsApp (Z-API): arquivos em public/media/ + manifest.
- * URLs públicas: PUBLIC_BASE_URL + /media/<arquivo>
+ * Carrega o catálogo de mídias do Banco de Dados.
+ * Mantemos o nome 'loadManifest' para compatibilidade, mas agora busca no PG.
  */
-
-const fs = require('fs');
-const path = require('path');
-
-const MANIFEST_PATH = path.join(__dirname, 'media-manifest.json');
-const PUBLIC_MEDIA_DIR = path.join(__dirname, '..', 'public', 'media');
-
-const ALLOWED_TYPES = new Set(['image', 'video', 'document', 'audio']);
-
-function loadManifest() {
+async function loadManifest() {
   try {
-    const raw = fs.readFileSync(MANIFEST_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
+    const rows = await db.getMediaCatalog();
+    const manifest = {};
+    rows.forEach(r => {
+      manifest[r.key] = {
+        file: r.filename,
+        type: r.type,
+        fileName: r.filename,
+        caption: (r.metadata && r.metadata.caption) || '',
+        descricao: (r.metadata && r.metadata.descricao) || '',
+      };
+    });
+    return manifest;
+  } catch (err) {
+    console.error('Erro ao carregar catálogo do banco:', err.message);
     return {};
   }
 }
 
-function getManifestEntry(key) {
+async function getManifestEntry(key) {
   if (!key || typeof key !== 'string' || key.startsWith('_')) return null;
-  const m = loadManifest();
+  const m = await loadManifest();
   return m[key] || null;
 }
 
@@ -40,21 +43,26 @@ function validateBasename(file) {
 function fileExistsInPublicMedia(file) {
   if (!validateBasename(file)) return false;
   const full = path.join(PUBLIC_MEDIA_DIR, file);
-  if (!full.startsWith(PUBLIC_MEDIA_DIR)) return false;
   return fs.existsSync(full);
 }
 
 /**
- * Resolve URL + metadados para envio Z-API. Retorna null se inválido.
+ * Resolve URL + metadados para envio Z-API.
  */
-function resolveMediaUrl(key) {
+async function resolveMediaUrl(key) {
   const base = (process.env.PUBLIC_BASE_URL || '').trim();
   if (!base) return null;
 
-  const entry = getManifestEntry(key);
+  const entry = await getManifestEntry(key);
   if (!entry || !entry.file || !entry.type) return null;
   if (!ALLOWED_TYPES.has(String(entry.type))) return null;
-  if (!fileExistsInPublicMedia(entry.file)) return null;
+  
+  // No fluxo de bootstrap, garantimos que o arquivo existe fisicamente.
+  // Se não existir, tentamos restaurar agora (on-demand fallback)
+  if (!fileExistsInPublicMedia(entry.file)) {
+      const fileRow = await db.getMediaFile(key);
+      if (fileRow) fs.writeFileSync(path.join(PUBLIC_MEDIA_DIR, entry.file), fileRow.file_data);
+  }
 
   const url = `${base.replace(/\/$/, '')}/media/${encodeURIComponent(entry.file)}`;
   return {
@@ -66,48 +74,44 @@ function resolveMediaUrl(key) {
 }
 
 /**
- * Salva ou atualiza uma mídia no catálogo.
+ * Salva ou atualiza uma mídia no banco de dados.
  */
-function saveMedia(key, entry) {
+async function saveMedia(key, entry, fileBuffer = null) {
   if (!key || typeof key !== 'string') throw new Error('Chave inválida');
-  const m = loadManifest();
-  m[key] = {
-    file: entry.file,
-    type: entry.type,
-    fileName: entry.fileName || entry.file,
-    caption: entry.caption || '',
-    descricao: entry.descricao || '',
-    updatedAt: new Date().toISOString()
+  
+  const metadata = {
+      caption: entry.caption || '',
+      descricao: entry.descricao || ''
   };
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), 'utf8');
-  return m[key];
+
+  // Se recebemos um buffer, salvamos no Postgres (persistência absoluta)
+  if (fileBuffer) {
+      await db.saveMediaEntry(key, entry.file, entry.type, fileBuffer, metadata);
+  }
+  
+  return entry;
 }
 
 /**
- * Remove uma mídia do catálogo e opcionalmente apaga o arquivo físico.
+ * Remove uma mídia do banco e da pasta física.
  */
-function deleteMedia(key, deleteFile = true) {
-  const m = loadManifest();
-  const entry = m[key];
-  if (!entry) return false;
-
-  if (deleteFile && entry.file) {
+async function deleteMedia(key) {
+  const entry = await getManifestEntry(key);
+  if (entry && entry.file) {
     const full = path.join(PUBLIC_MEDIA_DIR, entry.file);
     if (fs.existsSync(full)) {
-      try { fs.unlinkSync(full); } catch (e) { console.warn('Falha ao deletar arquivo físico:', e.message); }
+      try { fs.unlinkSync(full); } catch (e) { /* ignore */ }
     }
   }
-
-  delete m[key];
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), 'utf8');
+  await db.deleteMediaEntry(key);
   return true;
 }
 
 /**
- * Texto para injetar no system prompt (lista de chaves).
+ * Texto para injetar no system prompt.
  */
-function blocoPromptMidia() {
-  const m = loadManifest();
+async function blocoPromptMidia() {
+  const m = await loadManifest();
   const keys = Object.keys(m).filter((k) => !k.startsWith('_'));
   if (keys.length === 0) return '';
 
@@ -120,49 +124,39 @@ function blocoPromptMidia() {
   });
 
   return `
-
-## Mídia (opcional)
-No fim da resposta, uma linha por arquivo: [[MEDIA:chave]]
+## Mídia Disponível
+Mande arquivos usando a tag [[MEDIA:chave]] no fim da resposta.
 ${lines.join('\n')}
-(só chaves listadas; senão omita.)`;
+`;
 }
 
 /**
- * Remove marcações [[MEDIA:...]] e devolve lista de chaves na ordem.
+ * Substitui tags por links reais. Pequeno delay para garantir que resolveMediaUrl seja await.
  */
-function extrairMidiasDaResposta(texto) {
+async function extrairMidiasDaResposta(texto) {
   if (!texto) return { texto: '', mediaKeys: [] };
   
   const tagRegex = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
   const mediaKeys = [];
   let processado = texto;
 
-  // Encontra todas as ocorrências
-  let match;
-  while ((match = tagRegex.exec(texto)) !== null) {
+  const matches = [...texto.matchAll(tagRegex)];
+  for (const match of matches) {
     const key = match[1];
     mediaKeys.push(key);
     
-    // Tenta resolver o link para colocar no texto
-    const resolved = resolveMediaUrl(key);
+    const resolved = await resolveMediaUrl(key);
     let substituto = '';
     
     if (resolved && resolved.url) {
       substituto = `\n\n🔗 *Link do material:* ${resolved.url}\n`;
     } else {
-      // Fallback caso a PUBLIC_BASE_URL não esteja configurada
-      substituto = `\n\n📁 [Arquivo: ${key} disponíveis para envio]\n`;
+      substituto = `\n\n📁 [Arquivo: ${key}]\n`;
     }
-    
-    // Substitui a tag específica no texto processado
     processado = processado.replace(`[[MEDIA:${key}]]`, substituto);
   }
 
-  // Limpeza final de espaços redundantes
-  const textoFinal = processado
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
+  const textoFinal = processado.replace(/\n{3,}/g, '\n\n').trim();
   return { texto: textoFinal, mediaKeys };
 }
 
