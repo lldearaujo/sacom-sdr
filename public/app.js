@@ -693,8 +693,13 @@ async function loadProspeccaoKanban() {
       const card = document.createElement('div');
       card.className = 'kb-card';
       let titleParams = '';
-      if(lead.intentDetectado) {
-         titleParams = `<div class="kb-intent">🎯 ${lead.intentDetectado.tipo.toUpperCase()} (Urgência: ${lead.intentDetectado.urgencia})</div>`;
+      if(lead.ultimoIntent) {
+         try {
+           const ui = typeof lead.ultimoIntent === 'string' ? JSON.parse(lead.ultimoIntent) : lead.ultimoIntent;
+           if (ui && ui.interesse) {
+             titleParams = `<div class="kb-intent">🎯 ${ui.tipo.toUpperCase()} (Urgência: ${ui.urgencia})</div>`;
+           }
+         } catch(e) {}
       }
       if(lead.erro) {
          titleParams = `<div class="kb-error">🚨 ${lead.erro}</div>`;
@@ -733,6 +738,7 @@ async function openHistoricoModal(cnpj, nome, status) {
             <button class="btn-close" id="btn-close-hist">×</button>
          </div>
          <div class="modal-body" id="hist-body">Carregando...</div>
+         <div id="hist-suggestion" style="padding: 0 20px 20px 20px;"></div>
        </div>
      `;
      document.body.appendChild(modal);
@@ -741,6 +747,7 @@ async function openHistoricoModal(cnpj, nome, status) {
 
   document.getElementById('hist-title').textContent = 'Conversa: ' + nome;
   document.getElementById('hist-body').innerHTML = '<div class="loader"><div class="spinner"></div> Carregando...</div>';
+  document.getElementById('hist-suggestion').innerHTML = '';
   modal.classList.add('active');
 
   try {
@@ -752,18 +759,81 @@ async function openHistoricoModal(cnpj, nome, status) {
 
      document.getElementById('hist-body').innerHTML = hist.messages.map(m => `
        <div class="chat-bubble ${m.role}">
-         <div class="chat-role">${m.role === 'model' ? '🤖 Gemini IA (Lourdes)' : '👤 Lead (${nome})'}</div>
-         <div>${m.text.replace(/\n/g, '<br/>')}</div>
+         <div class="chat-role">${m.role === 'model' ? '🤖 Gemini IA' : '👤 Lead ('+nome+')'}</div>
+         <div>${(m.text || m.conteudo || '').replace(/\n/g, '<br/>')}</div>
        </div>
      `).join('');
 
-     // Scroll to bottom
+     // Verifica se a última mensagem da IA tem uma sugestão no intent
+     // Pegamos a última mensagem do 'model' que tenha intent preenchido
+     const lastModelMsg = [...hist.messages].reverse().find(m => m.role === 'model' && m.intent);
+     if (lastModelMsg && lastModelMsg.intent) {
+        renderSuggestionPanel(cnpj, lastModelMsg.intent);
+     }
+
      const body = document.getElementById('hist-body');
      body.scrollTop = body.scrollHeight;
 
   } catch (e) {
+     console.error(e);
      document.getElementById('hist-body').innerHTML = '<p style="color:var(--text-muted)">Falha ao carregar histórico... Talvez não haja interações com o bot.</p>';
   }
+}
+
+function renderSuggestionPanel(cnpj, intentRaw) {
+  const container = document.getElementById('hist-suggestion');
+  let intent = intentRaw;
+  if (typeof intent === 'string') {
+    try { intent = JSON.parse(intent); } catch(e) { return; }
+  }
+
+  // Só mostra se houver algo concreto para sugerir
+  if (!intent.sugestao_score && !intent.sugestao_etapa) return;
+
+  container.innerHTML = `
+    <div class="ia-suggestion-panel">
+      <div class="ia-suggestion-header">🤖 IA Sugere Ajustes Comercial</div>
+      <div class="ia-suggestion-body">
+        ${intent.sugestao_score ? `
+          <div class="suggestion-item">
+            <div class="suggestion-label">Novo Score</div>
+            <div class="suggestion-value">${intent.sugestao_score} pts</div>
+          </div>
+        ` : ''}
+        ${intent.sugestao_etapa ? `
+          <div class="suggestion-item">
+            <div class="suggestion-label">Mover Etapa</div>
+            <div class="suggestion-value">${intent.sugestao_etapa}</div>
+          </div>
+        ` : ''}
+        ${intent.motivo ? `<div class="suggestion-motivo">"${intent.motivo}"</div>` : ''}
+      </div>
+      <div class="suggestion-actions">
+        <button class="btn-approve" id="btn-aprovar-sugestao">✅ Aplicar Recomendação</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btn-aprovar-sugestao').addEventListener('click', async () => {
+    try {
+      const res = await fetch(`/api/prospeccao/${cnpj}/aprovar-sugestao`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          score: intent.sugestao_score,
+          etapa_funil: intent.sugestao_etapa,
+          status: intent.interesse ? 'oportunidade' : null
+        })
+      });
+      if (res.ok) {
+        alert('Sugestão aplicada com sucesso!');
+        container.innerHTML = '<div style="color:#10b981; font-weight:600; font-size:12px; text-align:right; padding: 10px;">✓ Sugestão aplicada e sincronizada no Postgres</div>';
+        loadProspeccaoKanban();
+      }
+    } catch(e) {
+      alert('Erro ao aplicar sugestão.');
+    }
+  });
 }
 
 /* ── Configurações IA View ────────────────────────────────────── */

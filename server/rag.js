@@ -108,7 +108,21 @@ WhatsApp humano: 2–4 blocos curtos (linha em branco entre eles), sem tom de e-
     .replace(/\$\{agente\}/g, agente)
     .replace(/\$\{cargo\}/g, cargo);
 
-  const intentPadrao = `Ao final, se houver interesse real em proposta/agendamento: <intent>{"interesse":true,"tipo":"agendamento|proposta","urgencia":"alta|media|baixa"}</intent>`;
+  const intentPadrao = `Ao final da resposta, se houver qualquer sinal de evolução na conversa, inclua obrigatoriamente a tag:
+<intent>{
+  "interesse": true|false,
+  "tipo": "agendamento|proposta|duvida|negativa",
+  "urgencia": "alta|media|baixa",
+  "sugestao_score": 0-40,
+  "sugestao_etapa": "Qualificação|Apresentação|Negociação|Fechamento",
+  "motivo": "resumo breve do porquê da sugestão"
+}</intent>
+
+Critérios Retomada (BANT/Score):
+- Budget (Orçamento): Possui verba? (0-10 pts)
+- Authority (Autoridade): É o decisor? (0-10 pts)
+- Need (Necessidade): O problema é real? (0-10 pts)
+- Timing (Tempo): Prazo próximo? (0-10 pts)`;
 
   const intentCustom = readEnvMultiline('BDR_INTENT_DETECCAO').trim();
   const blocoIntent = intentCustom.length > 0 ? intentCustom : intentPadrao;

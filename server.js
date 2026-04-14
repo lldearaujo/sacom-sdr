@@ -201,6 +201,33 @@ app.put('/api/prospeccao/:cnpj/status', async (req, res) => {
   }
 });
 
+app.post('/api/prospeccao/:cnpj/aprovar-sugestao', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  try {
+    const { cnpj } = req.params;
+    const { score, etapa_funil, status } = req.body || {};
+    
+    const lead = await db.getLeadByCnpj(cnpj);
+    if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
+
+    // Atualiza o lead com os novos valores aprovados
+    const leadUpdate = { ...lead };
+    if (score !== undefined) leadUpdate.score = score;
+    if (etapa_funil) leadUpdate.etapaFunil = etapa_funil;
+    
+    await db.upsertLead(leadUpdate);
+
+    // Se houver mudança de status na prospecção/kanban
+    if (status) {
+      await db.saveProspeccaoDB(cnpj, { status });
+    }
+
+    res.json({ ok: true, cnpj, score, etapa_funil, status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/prospeccao/:cnpj/historico', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {

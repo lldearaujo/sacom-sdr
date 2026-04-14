@@ -403,7 +403,10 @@ async function deleteKnowledgeByFonte(fonteArquivo) {
 
 async function getAllProspeccoes() {
   const { rows } = await pool.query(`
-    SELECT p.*, l.razao, l.fantasia, l.cidade, l.segmento_prioritario AS "segmentoPrioritario", l.classificacao
+    SELECT 
+      p.*, 
+      l.razao, l.fantasia, l.cidade, l.segmento_prioritario AS "segmentoPrioritario", l.classificacao, l.score,
+      (SELECT intent FROM conversas WHERE cnpj = p.cnpj ORDER BY criado_em DESC LIMIT 1) as "ultimoIntent"
     FROM prospeccao p
     LEFT JOIN leads l ON p.cnpj = l.cnpj
     ORDER BY p.atualizado_em DESC
@@ -425,6 +428,8 @@ async function getAllProspeccoes() {
     cidade: r.cidade,
     segmentoPrioritario: r.segmentoPrioritario,
     classificacao: r.classificacao,
+    score: r.score,
+    ultimoIntent: r.ultimoIntent,
   }));
 }
 

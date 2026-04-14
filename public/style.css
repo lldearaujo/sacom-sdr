@@ -428,6 +428,71 @@ body {
 .chat-bubble.user { background: linear-gradient(135deg,rgba(59,130,246,.2),rgba(99,102,241,.1)); border: 1px solid rgba(59,130,246,.25); align-self: flex-end; border-bottom-right-radius: 4px; color: var(--text); }
 .chat-role { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
 
+/* AI Suggestion Panel */
+.ia-suggestion-panel {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 20px;
+  border-left: 4px solid #10b981;
+}
+.ia-suggestion-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: #10b981;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ia-suggestion-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.suggestion-item {
+  background: var(--card);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.suggestion-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.suggestion-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.suggestion-motivo {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.4;
+}
+.suggestion-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.btn-approve {
+  background: #10b981;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-approve:hover { background: #059669; }
+
 /* ── Configurações IA ─────────────────────────────────────────── */
 .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .config-section { display: flex; flex-direction: column; gap: 14px; }
