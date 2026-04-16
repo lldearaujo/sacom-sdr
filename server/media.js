@@ -1,6 +1,11 @@
 'use strict';
 
 const db = require('./db');
+const fs = require('fs');
+const path = require('path');
+
+const PUBLIC_MEDIA_DIR = path.join(__dirname, '..', 'public', 'media');
+const ALLOWED_TYPES = new Set(['image', 'video', 'document', 'audio']);
 
 /**
  * Carrega o catálogo de mídias do Banco de Dados.

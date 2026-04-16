@@ -95,7 +95,8 @@ app.get('/api/leads', async (req, res) => {
     if (shouldIncludeEnrichment) {
       for (const lead of result.data) {
         // Obter enrichment direto do banco (já mapeado no upsert do bot de enrichment)
-        lead.enrichment = lead.enrichment || await db.getEnrichment(lead.cnpj);
+        const enr = lead.enrichment || await db.getEnrichment(lead.cnpj);
+        lead.enrichment = enr || { status: 'nao executado' };
       }
     }
 
@@ -117,7 +118,14 @@ app.get('/api/stats', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const stats = await db.getStats();
-    res.json(stats);
+    res.json({
+      ...stats,
+      // compatibilidade com validações antigas / smoke test
+      enrichmentTtlHours: ENRICHMENT_TTL_HOURS,
+      maxEnrichmentConcurrency: MAX_ENRICHMENT_CONCURRENCY,
+      enrichmentDomainCooldownMs: ENRICHMENT_DOMAIN_COOLDOWN_MS,
+      enrichmentFetchTimeoutMs: ENRICHMENT_FETCH_TIMEOUT_MS,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -134,7 +142,7 @@ app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
     
     // (Simplificado) Na arquitetura nova as infos são buscadas e salvas por um worker, 
     // ou usamos a url existente salva no banco.
-    const enrichment = lead.enrichment || await db.getEnrichment(lead.cnpj) || null;
+    const enrichment = lead.enrichment || await db.getEnrichment(lead.cnpj) || { status: 'nao executado' };
     res.json({
       cnpj: lead.cnpj,
       razao: lead.razao,
@@ -147,7 +155,8 @@ app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
 });
 
 app.get('/api/enrichment/warmup', (req, res) => {
-  res.json({ warmed: 0, status: 'Obsoleto na arquitetura atual - Use scripts externos' });
+  const concurrency = parseInt(req.query.concurrency || '1', 10);
+  res.json({ warmed: 0, concurrency, status: 'Obsoleto na arquitetura atual - Use scripts externos' });
 });
 
 // ─── APIs Prospecção ─────────────────────────────────────────────────────────
@@ -375,7 +384,18 @@ app.get('/api/ai/mensagem-preview/:cnpj', async (req, res) => {
 const MULTILINE_CONFIG_KEYS = new Set(['BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO']);
 
 app.get('/api/config', (req, res) => {
-  const keys = ['BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO', 'GEMINI_MODEL', 'GEMINI_TEMPERATURA', 'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO', 'NUMEROS_TESTE', 'PUBLIC_BASE_URL'];
+  const keys = [
+    'BDR_AGENTE_NOME', 'BDR_AGENTE_CARGO', 'BDR_SYSTEM_PROMPT', 'BDR_OBJETIVO_CONVERSA', 'BDR_INTENT_DETECCAO',
+    'GEMINI_MODEL', 'GEMINI_TEMPERATURA',
+    'PROSPECCAO_HORA_INICIO', 'PROSPECCAO_HORA_FIM', 'PROSPECCAO_COOLDOWN_DIAS', 'PROSPECCAO_LIMITE_DIARIO',
+    'NUMEROS_TESTE', 'PUBLIC_BASE_URL',
+    // Provedor WhatsApp
+    'WHATSAPP_PROVIDER',
+    // Evolution (opcional)
+    'EVOLUTION_BASE_URL', 'EVOLUTION_API_KEY',
+    // Z-API (opcional expor apenas pra debug visual)
+    'ZAPI_INSTANCE_ID',
+  ];
   const responseConfig = {};
   keys.forEach(k => {
     let val = process.env[k] || '';
@@ -400,6 +420,11 @@ app.post('/api/config', async (req, res) => {
       }
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         value = String(value);
+      }
+      // Normalizações específicas
+      if (key === 'WHATSAPP_PROVIDER') {
+        const v = String(value || '').trim().toLowerCase();
+        value = v === 'evolution' ? 'evolution' : 'zapi';
       }
       
       // Salva no process.env (runtime)
@@ -536,7 +561,7 @@ app.post('/api/media/upload', uploadMedia.single('file'), async (req, res) => {
 
 app.delete('/api/media/:key', async (req, res) => {
   try {
-    const success = await mediaMod.deleteMedia(req.params.key, true);
+    const success = await mediaMod.deleteMedia(req.params.key);
     if (!success) return res.status(404).json({ error: 'Mídia não encontrada no catálogo.' });
     res.json({ ok: true });
   } catch (err) {

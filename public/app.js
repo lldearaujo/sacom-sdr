@@ -861,6 +861,11 @@ async function initConfigView() {
     document.getElementById('cfg-cooldown').value = config.PROSPECCAO_COOLDOWN_DIAS || '';
     document.getElementById('cfg-limite').value = config.PROSPECCAO_LIMITE_DIARIO || '';
     document.getElementById('cfg-numeros-teste').value = config.NUMEROS_TESTE || '';
+
+    const wp = (config.WHATSAPP_PROVIDER || 'zapi').toLowerCase();
+    document.getElementById('cfg-whatsapp-provider').value = (wp === 'evolution') ? 'evolution' : 'zapi';
+    document.getElementById('cfg-evolution-base-url').value = config.EVOLUTION_BASE_URL || '';
+    document.getElementById('cfg-evolution-api-key').value = config.EVOLUTION_API_KEY || '';
   } catch (err) {
     showMsg('Erro ao carregar configurações: ' + err.message, 'error');
   }
@@ -888,7 +893,11 @@ async function initConfigView() {
       PROSPECCAO_HORA_FIM: document.getElementById('cfg-hora-fim').value,
       PROSPECCAO_COOLDOWN_DIAS: document.getElementById('cfg-cooldown').value,
       PROSPECCAO_LIMITE_DIARIO: document.getElementById('cfg-limite').value,
-      NUMEROS_TESTE: document.getElementById('cfg-numeros-teste').value
+      NUMEROS_TESTE: document.getElementById('cfg-numeros-teste').value,
+
+      WHATSAPP_PROVIDER: document.getElementById('cfg-whatsapp-provider').value,
+      EVOLUTION_BASE_URL: document.getElementById('cfg-evolution-base-url').value,
+      EVOLUTION_API_KEY: document.getElementById('cfg-evolution-api-key').value,
     };
 
     btnSalvar.disabled = true;

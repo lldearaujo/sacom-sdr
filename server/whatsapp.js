@@ -3,9 +3,7 @@
 const db = require('./db');
 const cache = require('./cache'); // Usaremos para locks
 const mediaCatalog = require('./media');
-
-const ZAPI_BASE = () =>
-  `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
+const providers = require('./whatsapp/providers');
 
 // ─── Formata número BR para padrão Z-API (5583999999999) ─────────────────────
 function formatarNumero(telefone) {
@@ -36,26 +34,14 @@ function delayAleatorio() {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ─── Envia mensagem de texto via Z-API ───────────────────────────────────────
+function getActiveProvider() {
+  return providers.getProvider();
+}
+
+// ─── Envia mensagem de texto via Provedor ────────────────────────────────────
 async function enviarMensagem(numero, mensagem) {
-  if (!process.env.ZAPI_INSTANCE_ID || !process.env.ZAPI_TOKEN) {
-    throw new Error('Z-API não configurada. Preencha ZAPI_INSTANCE_ID e ZAPI_TOKEN no .env');
-  }
-
-  const res = await fetch(`${ZAPI_BASE()}/send-text`, {
-    method:  'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Client-Token': process.env.ZAPI_CLIENT_TOKEN || '',
-    },
-    body: JSON.stringify({ phone: numero, message: mensagem }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Z-API ${res.status}: ${err}`);
-  }
-  return res.json(); // { zaapId, messageId, id }
+  const provider = getActiveProvider();
+  return provider.sendText({ phone: numero, message: mensagem });
 }
 
 const MAX_CHUNK = parseInt(process.env.WHATSAPP_RESPOSTA_MAX_CHUNK || '380', 10);
@@ -126,49 +112,13 @@ async function enviarTextoFracionado(numero, texto) {
   }
 }
 
-async function zapiPost(suffixPath, body) {
-  if (!process.env.ZAPI_INSTANCE_ID || !process.env.ZAPI_TOKEN) {
-    throw new Error('Z-API não configurada. Preencha ZAPI_INSTANCE_ID e ZAPI_TOKEN no .env');
-  }
-  const res = await fetch(`${ZAPI_BASE()}${suffixPath}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Client-Token': process.env.ZAPI_CLIENT_TOKEN || '',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Z-API ${res.status}: ${err}`);
-  }
-  return res.json();
-}
-
 /**
- * Envia um arquivo de mídia (URL pública HTTPS) via Z-API.
+ * Envia um arquivo de mídia (URL pública HTTPS) via provedor.
  * type: image | video | document | audio
  */
 async function enviarMidia(numero, { type, url, caption, fileName }) {
-  const phone = numero;
-  console.log(`[Z-API] Tentando enviar mídia: tipo=${type}, url=${url}`);
-  
-  switch (type) {
-    case 'image':
-      return zapiPost('/send-image', { phone, image: url, caption: caption || '', viewOnce: false });
-    case 'video':
-      return zapiPost('/send-video', { phone, video: url, caption: caption || '', viewOnce: false });
-    case 'document':
-      return zapiPost('/send-document', {
-        phone,
-        document: url,
-        fileName: fileName || 'documento.pdf',
-      });
-    case 'audio':
-      return zapiPost('/send-audio', { phone, audio: url, viewOnce: false });
-    default:
-      throw new Error(`Tipo de mídia não suportado: ${type}`);
-  }
+  const provider = getActiveProvider();
+  return provider.sendMedia({ phone: numero, type, url, caption, fileName });
 }
 
 const DELAY_ENTRE_MIDIAS_MS = 800;
@@ -188,7 +138,7 @@ async function enviarMidiasCatalogo(numero, mediaKeys) {
   let enviados = 0;
   for (let i = 0; i < mediaKeys.length; i++) {
     const key = mediaKeys[i];
-    const resolved = mediaCatalog.resolveMediaUrl(key);
+    const resolved = await mediaCatalog.resolveMediaUrl(key);
     if (!resolved) {
       console.warn(`[WhatsApp] Mídia ignorada (chave inválida ou arquivo ausente): ${key}`);
       continue;
@@ -320,4 +270,5 @@ module.exports = {
   encontrarCnpjPorNumero,
   isHorarioComercial,
   templatePadrao,
+  getActiveProvider,
 };
