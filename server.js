@@ -15,7 +15,9 @@ const cache = require('./server/cache');
 const gemini = require('./server/gemini');
 const whatsapp = require('./server/whatsapp');
 const whatsappInbound = require('./server/whatsapp-inbound');
+const evolutionInbound = require('./server/evolution-inbound');
 const whatsappDebounce = require('./server/whatsapp-debounce');
+const whatsappProviders = require('./server/whatsapp/providers');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
@@ -252,7 +254,7 @@ app.get('/api/prospeccao/:cnpj/historico', async (req, res) => {
 });
 
 app.post('/api/prospeccao/webhook', async (req, res) => {
-  // Responde Z-API imediatamente para evitar timeout
+  // Responde imediatamente para evitar timeout
   res.json({ ok: true });
 
   try {
@@ -261,7 +263,11 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
       return;
     }
     const payload = req.body;
-    console.log('\n[Webhook Z-API Recebido]', JSON.stringify({
+
+    // Compatibilidade: este endpoint histórico foi feito para Z-API.
+    // Se o projeto estiver usando Evolution, prefira o endpoint genérico /api/whatsapp/webhook.
+    console.log('\n[Webhook Inbound Recebido /api/prospeccao/webhook]', JSON.stringify({
+      providerAtivo: whatsappProviders.getProviderId(),
       phone: payload?.phone,
       fromMe: payload?.fromMe,
       type: payload?.type,
@@ -350,6 +356,137 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
     console.error('Erro no webhook Gemini/Z-API:', err.message);
   }
 });
+
+/**
+ * Webhook genérico de entrada (Z-API ou Evolution).
+ * Configure seu provedor externo para apontar para:
+ * - http(s)://SEU_HOST/api/whatsapp/webhook
+ */
+app.post('/api/whatsapp/webhook', async (req, res) => {
+  res.json({ ok: true });
+
+  try {
+    if (!dbReady) {
+      console.warn('[Webhook] Banco indisponível: ignorando processamento.');
+      return;
+    }
+
+    const providerId = whatsappProviders.getProviderId();
+    const payload = req.body;
+
+    if (providerId === 'zapi') {
+      console.log('\n[Webhook Z-API Recebido]', JSON.stringify({
+        phone: payload?.phone,
+        fromMe: payload?.fromMe,
+        type: payload?.type,
+        text: payload?.text?.message,
+        hasImage: !!payload?.image,
+        hasAudio: !!payload?.audio,
+        hasVideo: !!payload?.video,
+        hasDocument: !!payload?.document,
+      }));
+
+      if (payload.fromMe) return;
+
+      const userContent = await whatsappInbound.buildUserContentFromPayload(payload);
+      if (!userContent) {
+        console.log('[Webhook] Nenhum texto ou mídia suportada para processar.');
+        return;
+      }
+
+      const numero = (payload.phone || '').replace(/\\D/g, '');
+      await processInboundMessage({ numero, userContent });
+      return;
+    }
+
+    // Evolution
+    const inbound = evolutionInbound.buildInboundFromEvolutionPayload(payload);
+    console.log('\n[Webhook Evolution Recebido]', JSON.stringify({
+      okParse: !!inbound,
+      fromMe: false,
+      remoteJid: payload?.data?.key?.remoteJid || payload?.key?.remoteJid || null,
+      previewText: inbound?.userContent?.text ? inbound.userContent.text.slice(0, 160) : '',
+    }));
+
+    if (!inbound) {
+      console.warn('[Webhook Evolution] Payload não reconhecido (sem phone/text).');
+      return;
+    }
+
+    await processInboundMessage({ numero: inbound.phone, userContent: inbound.userContent });
+  } catch (err) {
+    console.error('Erro no webhook inbound:', err.message);
+  }
+});
+
+async function processInboundMessage({ numero, userContent }) {
+  const phoneDigits = String(numero || '').replace(/\\D/g, '');
+  if (!phoneDigits) return;
+
+  let cnpj = await whatsapp.encontrarCnpjPorNumero(phoneDigits);
+  let lead = await db.getLeadByCnpj(cnpj);
+
+  if (!lead) {
+    lead = await db.getLeadByNumero(phoneDigits);
+    if (lead) cnpj = lead.cnpj;
+  }
+
+  // [MODO TESTE] Lê NUMEROS_TESTE diretamente do .env
+  const rawTeste = process.env.NUMEROS_TESTE || '';
+  const numerosAutorizados = rawTeste.split(/[,;\\s]+/).map(n => n.replace(/\\D/g, '')).filter(n => n.length > 5);
+  const ehNumeroTeste = numerosAutorizados.some(nt => phoneDigits.includes(nt) || nt.includes(phoneDigits.substring(2)));
+
+  if (!lead && ehNumeroTeste) {
+    console.log(`[Webhook] MODO TESTE DE DIRETORIA: Autorizando ${phoneDigits}...`);
+    cnpj = '00000000000000';
+    lead = {
+      cnpj, razao: 'Usuário de Testes Internos', fantasia: 'Empresa Teste', cidade: 'Brasil',
+      segmento: 'Testes de Validação', dor_principal: 'Testar e validar comportamento da IA BDR',
+      oferta_principal: 'Midia Exterior e OOH', classificacao: '🔴 HOT'
+    };
+  }
+
+  if (!lead) {
+    console.log(`[Webhook] IGNORADO: Número ${phoneDigits} não está registrado.`);
+    return;
+  }
+
+  console.log(`[Webhook] Mensagem recebida — debounce ${whatsappDebounce.DEBOUNCE_MS}ms: ${lead.razao} (${cnpj})`);
+
+  whatsappDebounce.scheduleBatchedReply(
+    phoneDigits,
+    { userContent, lead, cnpj },
+    async ({ merged, lead: leadCtx, cnpj: cnpjCtx, phone }) => {
+      const userInput =
+        merged.parts && merged.parts.length > 0 ? merged : merged.text;
+
+      console.log(`[Webhook] Processando lote agregado para: ${leadCtx.razao} (${cnpjCtx})`);
+
+      const { resposta, intent, mediaKeys = [] } = await gemini.processarRespostaLead(leadCtx, userInput);
+
+      if (intent?.interesse) {
+        const type = intent.tipo || 'oportunidade';
+        const isFechamento = type === 'fechamento';
+        console.log(`${isFechamento ? '🤝 CONVERSÃO' : '🔥 OPORTUNIDADE'}: ${leadCtx.razao} (${leadCtx.cidade}) — ${type}`);
+        
+        let newStatus = intent.urgencia === 'alta' ? 'oportunidade' : 'respondido';
+        if (isFechamento) newStatus = 'convertido';
+        
+        await db.saveProspeccaoDB(cnpjCtx, { status: newStatus });
+      }
+
+      await new Promise((r) => setTimeout(r, 800 + Math.random() * 1400));
+
+      if (resposta && resposta.trim()) {
+        await whatsapp.enviarTextoFracionado(phone, resposta);
+      }
+      if (mediaKeys.length) {
+        const rMidia = await whatsapp.enviarMidiasCatalogo(phone, mediaKeys);
+        if (rMidia.enviados) console.log(`[Webhook] Mídias enviadas: ${rMidia.enviados} (${mediaKeys.join(', ')})`);
+      }
+    }
+  );
+}
 
 // ─── APIs AI & Insights ────────────────────────────────────────────────────────
 
@@ -593,7 +730,9 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✅ SA Comunicação - RAG + PGVector + Redis rodando em http://0.0.0.0:${PORT}`);
     console.log(`   🤖 Gemini AI: ${process.env.GEMINI_MODEL || 'gemini-1.5-flash'}`);
-    console.log(`   📱 Z-API: ${process.env.ZAPI_INSTANCE_ID ? 'configurada' : 'não configurada'}\n`);
+    console.log(`   📱 WhatsApp Provider: ${whatsappProviders.getProviderId()}`);
+    console.log(`   📱 Z-API: ${process.env.ZAPI_INSTANCE_ID ? 'configurada' : 'não configurada'}`);
+    console.log(`   📱 Evolution: ${process.env.EVOLUTION_BASE_URL ? 'configurada' : 'não configurada'}\n`);
   });
 }
 
