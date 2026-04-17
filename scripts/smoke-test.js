@@ -58,6 +58,12 @@ function validateStats(payload) {
   if (typeof payload.maxEnrichmentConcurrency !== 'number') {
     throw new Error('Resposta invalida em /api/stats: campo "maxEnrichmentConcurrency" ausente');
   }
+  if (!payload.warmup || typeof payload.warmup.enabled !== 'boolean') {
+    throw new Error('Resposta invalida em /api/stats: status de warmup ausente');
+  }
+  if (!payload.recorrenciaAnual || typeof payload.recorrenciaAnual.projectedCampaigns !== 'number') {
+    throw new Error('Resposta invalida em /api/stats: recorrencia anual ausente');
+  }
 }
 
 function validateLeads(payload) {
@@ -116,7 +122,16 @@ async function runSmoke() {
   if (typeof warmup.concurrency !== 'number') {
     throw new Error('Resposta invalida em /api/enrichment/warmup: concorrencia ausente');
   }
+  if (!Array.isArray(warmup.segmentos)) {
+    throw new Error('Resposta invalida em /api/enrichment/warmup: segmentos ausentes');
+  }
   console.log('[SMOKE] /api/enrichment/warmup ok');
+
+  const recorrencia = await requestJson('/api/oportunidades/recorrencia?limit=50');
+  if (typeof recorrencia.projectedCampaigns !== 'number' || !Array.isArray(recorrencia.windowsBySegment)) {
+    throw new Error('Resposta invalida em /api/oportunidades/recorrencia');
+  }
+  console.log('[SMOKE] /api/oportunidades/recorrencia ok');
 
   console.log('[SMOKE] Todos os checks passaram com sucesso.\n');
 }

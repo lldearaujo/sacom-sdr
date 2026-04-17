@@ -27,6 +27,12 @@ MAX_ENRICHMENTS_PER_REQUEST=20
 MAX_ENRICHMENT_CONCURRENCY=4
 ENRICHMENT_DOMAIN_COOLDOWN_MS=600
 ENRICHMENT_FETCH_TIMEOUT_MS=4000
+ENRICHMENT_WARMUP_ENABLED=true
+ENRICHMENT_WARMUP_HOUR=7
+ENRICHMENT_WARMUP_MINUTE=0
+ENRICHMENT_WARMUP_LIMIT=30
+ENRICHMENT_WARMUP_SEGMENTS=Varejo,Saude,Automotivo,Educacao,Construcao e Imoveis
+# ENRICHMENT_WARMUP_ON_START=false
 ```
 
 ## Execucao
@@ -67,7 +73,8 @@ npm run smoke:spawn
 - `GET /api/leads`: lista paginada com filtros (`classificacao`, `segmento`, `cidade`, `search`, `consciencia`, `viabilidade`, `segmento_prioritario`, `recorrencia`, `oferta`, `pacote`, `prioridade`, `gatilho`, `order_by`, `page`, `limit`) e enrichment em lote opcional com `include_enrichment=true`, `enrich_limit`, `enrich_concurrency` e `force_refresh=true`
 - `GET /api/health`: healthcheck simples para monitoramento
 - `GET /api/leads/:cnpj/enrichment`: enrichment individual com cache local, TTL e fallback seguro (`force_refresh=true`)
-- `GET /api/enrichment/warmup`: aquece cache de enrichment para os top leads (`limit`, `concurrency`, `force_refresh=true`)
+- `GET /api/enrichment/warmup`: aquece cache de enrichment priorizando segmentos estratégicos (`limit`, `concurrency`, `segmentos`, `force_refresh=true`)
+- `GET /api/oportunidades/recorrencia`: projeção de campanhas anuais e janelas por segmento prioritário
 
 ## Comportamento de dados
 
@@ -78,6 +85,8 @@ npm run smoke:spawn
 - Recomendacao comercial por lead: `ofertaPrincipal`, `pacoteSugerido`, `prioridadeComercial`, `etapaFunil`, `proximoPasso`
 - Cache de enrichment com TTL configuravel (`ENRICHMENT_TTL_HOURS`) e limite por requisicao (`MAX_ENRICHMENTS_PER_REQUEST`)
 - Controle de concorrencia de enrichment (`MAX_ENRICHMENT_CONCURRENCY`) e cooldown por dominio (`ENRICHMENT_DOMAIN_COOLDOWN_MS`)
+- Warmup diário automático configurável por horário e segmentos prioritários (status disponível em `stats.warmup`)
+- Projeção de recorrência anual por segmento disponível em `stats.recorrenciaAnual`
 
 ## Troubleshooting rapido
 

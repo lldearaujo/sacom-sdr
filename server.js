@@ -33,6 +33,347 @@ const MAX_ENRICHMENTS_PER_REQUEST = Number.parseInt(process.env.MAX_ENRICHMENTS_
 const MAX_ENRICHMENT_CONCURRENCY = Number.parseInt(process.env.MAX_ENRICHMENT_CONCURRENCY || '4', 10);
 const ENRICHMENT_DOMAIN_COOLDOWN_MS = Number.parseInt(process.env.ENRICHMENT_DOMAIN_COOLDOWN_MS || '600', 10);
 const ENRICHMENT_FETCH_TIMEOUT_MS = Number.parseInt(process.env.ENRICHMENT_FETCH_TIMEOUT_MS || '4000', 10);
+const ENRICHMENT_WARMUP_ENABLED = String(process.env.ENRICHMENT_WARMUP_ENABLED || 'true').toLowerCase() !== 'false';
+const ENRICHMENT_WARMUP_HOUR = Number.parseInt(process.env.ENRICHMENT_WARMUP_HOUR || '7', 10);
+const ENRICHMENT_WARMUP_MINUTE = Number.parseInt(process.env.ENRICHMENT_WARMUP_MINUTE || '0', 10);
+const ENRICHMENT_WARMUP_LIMIT = Number.parseInt(process.env.ENRICHMENT_WARMUP_LIMIT || '30', 10);
+const ENRICHMENT_WARMUP_ON_START = String(process.env.ENRICHMENT_WARMUP_ON_START || 'false').toLowerCase() === 'true';
+const ENRICHMENT_WARMUP_SEGMENTS = (process.env.ENRICHMENT_WARMUP_SEGMENTS
+  || 'Varejo,Saude,Automotivo,Educacao,Construcao e Imoveis')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const domainThrottleState = new Map();
+let nextWarmupAt = null;
+const warmupStatus = {
+  running: false,
+  lastSource: null,
+  lastStartedAt: null,
+  lastFinishedAt: null,
+  lastDurationMs: null,
+  lastError: null,
+  lastWarmed: 0,
+  lastSegments: [],
+};
+
+const CAMPAIGN_WINDOWS = [
+  { id: 'volta_as_aulas', label: 'Volta às aulas', months: [1], segmentos: ['Educacao'] },
+  { id: 'carnaval_verao', label: 'Carnaval e verão', months: [2], segmentos: ['Varejo', 'Turismo', 'Outros'] },
+  { id: 'dia_das_maes', label: 'Dia das mães', months: [5], segmentos: ['Varejo', 'Saude'] },
+  { id: 'sao_joao', label: 'São João', months: [6], segmentos: ['Varejo', 'Automotivo', 'Outros'] },
+  { id: 'ferias_julho', label: 'Férias de julho', months: [7], segmentos: ['Educacao', 'Varejo'] },
+  { id: 'dia_dos_pais', label: 'Dia dos pais', months: [8], segmentos: ['Varejo', 'Automotivo'] },
+  { id: 'aniversario_empresa', label: 'Aniversário da empresa', months: [1,2,3,4,5,6,7,8,9,10,11,12], segmentos: ['Varejo', 'Saude', 'Automotivo', 'Educacao', 'Construcao e Imoveis', 'Institucional', 'Outros'] },
+  { id: 'dia_das_criancas', label: 'Dia das crianças', months: [10], segmentos: ['Varejo', 'Educacao'] },
+  { id: 'black_friday', label: 'Black Friday', months: [11], segmentos: ['Varejo', 'Automotivo', 'Tecnologia', 'Outros'] },
+  { id: 'natal', label: 'Natal', months: [12], segmentos: ['Varejo', 'Saude', 'Outros'] },
+];
+
+function getRecurringPotentialWeight(level) {
+  if (level === 'Alta') return 3;
+  if (level === 'Media') return 2;
+  return 1;
+}
+
+function getPackageTicketWeight(packageName) {
+  if (packageName === 'Plano Dominio da Cidade') return 3;
+  if (packageName === 'Plano Impacto') return 2;
+  return 1;
+}
+
+function getAnnualCampaignEstimate(lead) {
+  const recurringWeight = getRecurringPotentialWeight(lead.potencialRecorrencia);
+  if (recurringWeight === 3) return 10;
+  if (recurringWeight === 2) return 6;
+  return 3;
+}
+
+function getAnnualRecurringProjection(leads) {
+  const projectionBySegment = {};
+  let projectedCampaigns = 0;
+  let projectedTicketWeight = 0;
+
+  leads.forEach((lead) => {
+    const segment = lead.segmentoPrioritario || 'Outros';
+    const annualCampaigns = getAnnualCampaignEstimate(lead);
+    const ticketWeight = getPackageTicketWeight(lead.pacoteSugerido);
+    projectedCampaigns += annualCampaigns;
+    projectedTicketWeight += annualCampaigns * ticketWeight;
+
+    if (!projectionBySegment[segment]) {
+      projectionBySegment[segment] = {
+        leads: 0,
+        projectedCampaigns: 0,
+        projectedTicketWeight: 0,
+      };
+    }
+    projectionBySegment[segment].leads += 1;
+    projectionBySegment[segment].projectedCampaigns += annualCampaigns;
+    projectionBySegment[segment].projectedTicketWeight += annualCampaigns * ticketWeight;
+  });
+
+  return {
+    projectedCampaigns,
+    projectedTicketWeight,
+    bySegment: projectionBySegment,
+  };
+}
+
+function getUpcomingCampaignWindows(segment, now = new Date()) {
+  const currentMonth = now.getMonth() + 1;
+  const candidates = CAMPAIGN_WINDOWS
+    .filter((w) => w.segmentos.includes(segment) || w.segmentos.includes('Outros'))
+    .map((w) => {
+      const nextMonth = w.months.find((m) => m >= currentMonth) || w.months[0];
+      const wrapsYear = nextMonth < currentMonth;
+      const nextYear = now.getFullYear() + (wrapsYear ? 1 : 0);
+      const nextDate = new Date(nextYear, nextMonth - 1, 1);
+      return {
+        id: w.id,
+        label: w.label,
+        nextDate: nextDate.toISOString(),
+        nextMonth,
+      };
+    })
+    .sort((a, b) => Date.parse(a.nextDate) - Date.parse(b.nextDate));
+  return candidates.slice(0, 3);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isEnrichmentExpired(entry) {
+  if (!entry || !entry.atualizadoEm) return true;
+  const updatedMs = Date.parse(entry.atualizadoEm);
+  if (Number.isNaN(updatedMs)) return true;
+  const ttlMs = ENRICHMENT_TTL_HOURS * 60 * 60 * 1000;
+  return Date.now() - updatedMs > ttlMs;
+}
+
+function normalizeSite(site) {
+  if (!site) return null;
+  const trimmed = String(site).trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+}
+
+function extractDomain(siteUrl) {
+  try {
+    const u = new URL(siteUrl);
+    return u.hostname.replace(/^www\./i, '').toLowerCase();
+  } catch (_) {
+    return null;
+  }
+}
+
+async function waitForDomainSlot(domain) {
+  if (!domain) return;
+  while (true) {
+    const state = domainThrottleState.get(domain) || { active: 0, lastFinishedAt: 0 };
+    const elapsed = Date.now() - state.lastFinishedAt;
+    if (state.active === 0 && elapsed >= ENRICHMENT_DOMAIN_COOLDOWN_MS) return;
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(120);
+  }
+}
+
+async function withDomainThrottle(siteUrl, action) {
+  const domain = extractDomain(siteUrl);
+  if (!domain) return action();
+
+  await waitForDomainSlot(domain);
+  const state = domainThrottleState.get(domain) || { active: 0, lastFinishedAt: 0 };
+  state.active += 1;
+  domainThrottleState.set(domain, state);
+  try {
+    return await action();
+  } finally {
+    const updated = domainThrottleState.get(domain) || { active: 1, lastFinishedAt: 0 };
+    updated.active = Math.max(0, updated.active - 1);
+    updated.lastFinishedAt = Date.now();
+    domainThrottleState.set(domain, updated);
+  }
+}
+
+async function runWithConcurrency(items, limit, handler) {
+  if (!items.length) return;
+  const safeLimit = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+  const workers = Array.from({ length: safeLimit }, async () => {
+    while (true) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= items.length) return;
+      // eslint-disable-next-line no-await-in-loop
+      await handler(items[i], i);
+    }
+  });
+  await Promise.allSettled(workers);
+}
+
+function extractSiteSignals(html) {
+  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+  return {
+    titulo: title.trim(),
+    hasInstagram: /instagram\.com/i.test(html),
+    hasFacebook: /facebook\.com/i.test(html),
+    hasLinkedin: /linkedin\.com/i.test(html),
+    hasWhatsapp: /whatsapp|wa\.me/i.test(html),
+    hasForm: /<form/i.test(html),
+    hasMetaDescription: /<meta[^>]*name=["']description["']/i.test(html),
+  };
+}
+
+function inferDigitalMaturity(signals) {
+  let points = 0;
+  if (signals.hasMetaDescription) points += 1;
+  if (signals.hasForm) points += 1;
+  if (signals.hasInstagram) points += 1;
+  if (signals.hasFacebook) points += 1;
+  if (signals.hasLinkedin) points += 1;
+  if (signals.hasWhatsapp) points += 1;
+  if (points >= 5) return 'Alta';
+  if (points >= 3) return 'Media';
+  return 'Baixa';
+}
+
+async function fetchAndPersistEnrichment(lead, { forceRefresh = false } = {}) {
+  const cached = await db.getEnrichment(lead.cnpj);
+  if (!forceRefresh && cached && !isEnrichmentExpired(cached)) return cached;
+
+  const siteUrl = normalizeSite(lead.site);
+  if (!siteUrl) {
+    const fallback = {
+      status: 'sem_site',
+      maturidadeDigital: 'Baixa',
+      sinais: {},
+      fonte: 'sem_site',
+    };
+    await db.saveEnrichment(lead.cnpj, fallback);
+    return db.getEnrichment(lead.cnpj);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ENRICHMENT_FETCH_TIMEOUT_MS);
+  try {
+    const response = await withDomainThrottle(siteUrl, () => fetch(siteUrl, { signal: controller.signal }));
+    const html = await response.text();
+    const signals = extractSiteSignals(html);
+    await db.saveEnrichment(lead.cnpj, {
+      status: 'ok',
+      siteUrl,
+      tituloSite: signals.titulo || '',
+      maturidadeDigital: inferDigitalMaturity(signals),
+      sinais: signals,
+      fonte: 'fetch_site',
+    });
+    return db.getEnrichment(lead.cnpj);
+  } catch (err) {
+    await db.saveEnrichment(lead.cnpj, {
+      status: 'erro',
+      siteUrl,
+      maturidadeDigital: 'Nao identificado',
+      sinais: {},
+      erro: err.message,
+      fonte: 'fallback_erro',
+    });
+    return db.getEnrichment(lead.cnpj);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function enrichLeadsBatch(leads, { limit = 10, concurrency = MAX_ENRICHMENT_CONCURRENCY, forceRefresh = false } = {}) {
+  const cappedLimit = Math.max(0, Math.min(Number.parseInt(limit, 10) || 0, MAX_ENRICHMENTS_PER_REQUEST));
+  const selected = leads.slice(0, cappedLimit);
+  const safeConcurrency = Math.max(1, Math.min(Number.parseInt(concurrency, 10) || MAX_ENRICHMENT_CONCURRENCY, MAX_ENRICHMENT_CONCURRENCY));
+  const enrichmentByCnpj = {};
+  await runWithConcurrency(selected, safeConcurrency, async (lead) => {
+    enrichmentByCnpj[lead.cnpj] = await fetchAndPersistEnrichment(lead, { forceRefresh });
+  });
+  return { selected, enrichmentByCnpj, concurrency: safeConcurrency };
+}
+
+async function buildWarmupCandidates({ limit, segmentos }) {
+  const target = Math.max(1, Math.min(limit, MAX_ENRICHMENTS_PER_REQUEST));
+  const unique = new Map();
+  for (const seg of segmentos) {
+    // eslint-disable-next-line no-await-in-loop
+    const partial = await db.queryLeads({ segmento_prioritario: seg, limit: target, page: 1, order_by: 'score_comercial' });
+    partial.data.forEach((lead) => {
+      if (!unique.has(lead.cnpj) && unique.size < target * 2) unique.set(lead.cnpj, lead);
+    });
+    if (unique.size >= target * 2) break;
+  }
+  if (unique.size < target) {
+    const fallback = await db.queryLeads({ limit: target * 2, page: 1, order_by: 'score_comercial' });
+    fallback.data.forEach((lead) => {
+      if (!unique.has(lead.cnpj) && unique.size < target * 2) unique.set(lead.cnpj, lead);
+    });
+  }
+
+  const leads = Array.from(unique.values());
+  const checks = await Promise.all(
+    leads.map(async (lead) => ({ lead, enrichment: await db.getEnrichment(lead.cnpj) })),
+  );
+  const staleFirst = checks
+    .filter(({ enrichment }) => !enrichment || isEnrichmentExpired(enrichment))
+    .map(({ lead }) => lead);
+  const freshFallback = checks
+    .filter(({ enrichment }) => enrichment && !isEnrichmentExpired(enrichment))
+    .map(({ lead }) => lead);
+
+  return [...staleFirst, ...freshFallback].slice(0, target);
+}
+
+async function runWarmup({ source = 'manual', limit = ENRICHMENT_WARMUP_LIMIT, concurrency = MAX_ENRICHMENT_CONCURRENCY, forceRefresh = false, segmentos = ENRICHMENT_WARMUP_SEGMENTS } = {}) {
+  const startedAt = Date.now();
+  warmupStatus.running = true;
+  warmupStatus.lastSource = source;
+  warmupStatus.lastStartedAt = new Date(startedAt).toISOString();
+  warmupStatus.lastError = null;
+  warmupStatus.lastSegments = segmentos;
+  try {
+    const candidates = await buildWarmupCandidates({ limit, segmentos });
+    const result = await enrichLeadsBatch(candidates, { limit: candidates.length, concurrency, forceRefresh });
+    warmupStatus.lastWarmed = result.selected.length;
+  } catch (err) {
+    warmupStatus.lastError = err.message;
+    throw err;
+  } finally {
+    warmupStatus.running = false;
+    warmupStatus.lastFinishedAt = new Date().toISOString();
+    warmupStatus.lastDurationMs = Date.now() - startedAt;
+  }
+}
+
+function computeNextWarmupAt() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(ENRICHMENT_WARMUP_HOUR, ENRICHMENT_WARMUP_MINUTE, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  return next;
+}
+
+function scheduleDailyWarmup() {
+  if (!ENRICHMENT_WARMUP_ENABLED) return;
+  const next = computeNextWarmupAt();
+  nextWarmupAt = next.toISOString();
+  const delayMs = Math.max(1000, next.getTime() - Date.now());
+  setTimeout(async () => {
+    try {
+      await runWarmup({ source: 'scheduler' });
+      console.log('[Warmup] Rotina diária executada com sucesso.');
+    } catch (err) {
+      console.error('[Warmup] Falha na rotina diária:', err.message);
+    } finally {
+      scheduleDailyWarmup();
+    }
+  }, delayMs);
+}
 
 // ─── APIs Core ────────────────────────────────────────────────────────────────
 
@@ -92,12 +433,18 @@ app.get('/api/leads', async (req, res) => {
     
     // Anexa enrichment se solicitado
     const shouldIncludeEnrichment = String(req.query.include_enrichment || '').toLowerCase() === 'true';
+    const enrichLimit = Number.parseInt(req.query.enrich_limit || String(result.data.length), 10);
+    const enrichConcurrency = Number.parseInt(req.query.enrich_concurrency || String(MAX_ENRICHMENT_CONCURRENCY), 10);
+    const shouldForceRefresh = String(req.query.force_refresh || '').toLowerCase() === 'true';
     if (shouldIncludeEnrichment) {
-      for (const lead of result.data) {
-        // Obter enrichment direto do banco (já mapeado no upsert do bot de enrichment)
-        const enr = lead.enrichment || await db.getEnrichment(lead.cnpj);
-        lead.enrichment = enr || { status: 'nao executado' };
-      }
+      const batch = await enrichLeadsBatch(result.data, {
+        limit: Number.isNaN(enrichLimit) ? result.data.length : enrichLimit,
+        concurrency: Number.isNaN(enrichConcurrency) ? MAX_ENRICHMENT_CONCURRENCY : enrichConcurrency,
+        forceRefresh: shouldForceRefresh,
+      });
+      result.data.forEach((lead) => {
+        lead.enrichment = batch.enrichmentByCnpj[lead.cnpj] || lead.enrichment || null;
+      });
     }
 
     res.json({
@@ -107,6 +454,8 @@ app.get('/api/leads', async (req, res) => {
       includesEnrichment: shouldIncludeEnrichment,
       enrichmentTtlHours: ENRICHMENT_TTL_HOURS,
       maxEnrichmentConcurrency: MAX_ENRICHMENT_CONCURRENCY,
+      enrichmentDomainCooldownMs: ENRICHMENT_DOMAIN_COOLDOWN_MS,
+      enrichmentFetchTimeoutMs: ENRICHMENT_FETCH_TIMEOUT_MS,
       data: result.data,
     });
   } catch (err) {
@@ -118,6 +467,18 @@ app.get('/api/stats', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
     const stats = await db.getStats();
+    const leadsResult = await db.queryLeads({ limit: 5000, page: 1, order_by: 'score_comercial' });
+    const annualProjection = getAnnualRecurringProjection(leadsResult.data);
+    const topRecurringSegments = Object.entries(annualProjection.bySegment)
+      .sort((a, b) => b[1].projectedCampaigns - a[1].projectedCampaigns)
+      .slice(0, 5)
+      .map(([segmento, data]) => ({
+        segmento,
+        leads: data.leads,
+        projectedCampaigns: data.projectedCampaigns,
+        projectedTicketWeight: data.projectedTicketWeight,
+      }));
+
     res.json({
       ...stats,
       // compatibilidade com validações antigas / smoke test
@@ -125,6 +486,54 @@ app.get('/api/stats', async (req, res) => {
       maxEnrichmentConcurrency: MAX_ENRICHMENT_CONCURRENCY,
       enrichmentDomainCooldownMs: ENRICHMENT_DOMAIN_COOLDOWN_MS,
       enrichmentFetchTimeoutMs: ENRICHMENT_FETCH_TIMEOUT_MS,
+      recorrenciaAnual: {
+        projectedCampaigns: annualProjection.projectedCampaigns,
+        projectedTicketWeight: annualProjection.projectedTicketWeight,
+        topRecurringSegments,
+      },
+      warmup: {
+        ...warmupStatus,
+        enabled: ENRICHMENT_WARMUP_ENABLED,
+        scheduleHour: ENRICHMENT_WARMUP_HOUR,
+        scheduleMinute: ENRICHMENT_WARMUP_MINUTE,
+        scheduleSegments: ENRICHMENT_WARMUP_SEGMENTS,
+        nextWarmupAt,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/oportunidades/recorrencia', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  try {
+    const limit = Number.parseInt(req.query.limit || '1000', 10);
+    const segmento = req.query.segmento ? String(req.query.segmento) : null;
+    const query = {
+      limit: Number.isNaN(limit) ? 1000 : Math.max(1, Math.min(limit, 5000)),
+      page: 1,
+      order_by: 'score_comercial',
+    };
+    if (segmento) query.segmento_prioritario = segmento;
+
+    const leadsResult = await db.queryLeads(query);
+    const projection = getAnnualRecurringProjection(leadsResult.data);
+    const now = new Date();
+
+    const windowsBySegment = Object.keys(projection.bySegment).map((seg) => ({
+      segmento: seg,
+      windows: getUpcomingCampaignWindows(seg, now),
+      projectedCampaigns: projection.bySegment[seg].projectedCampaigns,
+      projectedTicketWeight: projection.bySegment[seg].projectedTicketWeight,
+      leads: projection.bySegment[seg].leads,
+    })).sort((a, b) => b.projectedCampaigns - a.projectedCampaigns);
+
+    res.json({
+      totalLeadsConsiderados: leadsResult.data.length,
+      projectedCampaigns: projection.projectedCampaigns,
+      projectedTicketWeight: projection.projectedTicketWeight,
+      windowsBySegment,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -139,14 +548,14 @@ app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
   try {
     const lead = await db.getLeadByCnpj(req.params.cnpj);
     if (!lead) return res.status(404).json({ error: 'Lead nao encontrado' });
-    
-    // (Simplificado) Na arquitetura nova as infos são buscadas e salvas por um worker, 
-    // ou usamos a url existente salva no banco.
-    const enrichment = lead.enrichment || await db.getEnrichment(lead.cnpj) || { status: 'nao executado' };
+    const forceRefresh = String(req.query.force_refresh || '').toLowerCase() === 'true';
+    const enrichment = await fetchAndPersistEnrichment(lead, { forceRefresh });
     res.json({
       cnpj: lead.cnpj,
       razao: lead.razao,
       fantasia: lead.fantasia,
+      forceRefresh,
+      enrichmentTtlHours: ENRICHMENT_TTL_HOURS,
       enrichment,
     });
   } catch (err) {
@@ -155,8 +564,37 @@ app.get('/api/leads/:cnpj/enrichment', async (req, res) => {
 });
 
 app.get('/api/enrichment/warmup', (req, res) => {
-  const concurrency = parseInt(req.query.concurrency || '1', 10);
-  res.json({ warmed: 0, concurrency, status: 'Obsoleto na arquitetura atual - Use scripts externos' });
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  const limit = Number.parseInt(req.query.limit || String(ENRICHMENT_WARMUP_LIMIT), 10);
+  const concurrency = Number.parseInt(req.query.concurrency || String(MAX_ENRICHMENT_CONCURRENCY), 10);
+  const forceRefresh = String(req.query.force_refresh || '').toLowerCase() === 'true';
+  const source = req.query.source ? String(req.query.source) : 'manual';
+  const segmentos = (String(req.query.segmentos || ENRICHMENT_WARMUP_SEGMENTS.join(',')))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  runWarmup({
+    source,
+    limit: Number.isNaN(limit) ? ENRICHMENT_WARMUP_LIMIT : limit,
+    concurrency: Number.isNaN(concurrency) ? MAX_ENRICHMENT_CONCURRENCY : concurrency,
+    forceRefresh,
+    segmentos,
+  })
+    .then(() => {
+      res.json({
+        warmed: warmupStatus.lastWarmed,
+        concurrency: Number.isNaN(concurrency) ? MAX_ENRICHMENT_CONCURRENCY : concurrency,
+        forceRefresh,
+        source,
+        segmentos,
+        lastFinishedAt: warmupStatus.lastFinishedAt,
+        lastDurationMs: warmupStatus.lastDurationMs,
+      });
+    })
+    .catch((err) => {
+      res.status(500).json({ error: err.message, warmup: warmupStatus });
+    });
 });
 
 // ─── APIs Prospecção ─────────────────────────────────────────────────────────
@@ -573,6 +1011,16 @@ async function startServer() {
     await db.bootstrapSystem().catch(err => {
       console.error('⚠️ Falha no bootstrap de dados:', err.message);
     });
+
+    if (ENRICHMENT_WARMUP_ENABLED) {
+      scheduleDailyWarmup();
+      console.log(`[Warmup] Agendado diariamente para ${String(ENRICHMENT_WARMUP_HOUR).padStart(2, '0')}:${String(ENRICHMENT_WARMUP_MINUTE).padStart(2, '0')}.`);
+      if (ENRICHMENT_WARMUP_ON_START) {
+        runWarmup({ source: 'startup' })
+          .then(() => console.log('[Warmup] Execucao inicial concluida.'))
+          .catch((err) => console.error('[Warmup] Falha na execucao inicial:', err.message));
+      }
+    }
 
   } catch (err) {
     dbReady = false;

@@ -23,6 +23,7 @@ let charts = {};
 let segmentList = [];
 let leadsViewInitialized = false;
 let leadsIndexByCnpj = new Map();
+let recorrenciaData = null;
 
 function showApiError(message) {
   const main = document.querySelector('.main');
@@ -125,6 +126,17 @@ async function loadStats() {
   renderChartCidades();
   renderChartContatos();
   renderTop5();
+  await loadRecorrencia();
+}
+
+async function loadRecorrencia() {
+  try {
+    recorrenciaData = await fetchJson('/api/oportunidades/recorrencia?limit=500');
+  } catch (err) {
+    console.error(err);
+    recorrenciaData = null;
+  }
+  renderRecorrencia();
 }
 
 function preencherSelect(id, values) {
@@ -303,6 +315,44 @@ function renderTop5() {
     `;
     container.appendChild(div);
   });
+}
+
+function renderRecorrencia() {
+  const campanhas = recorrenciaData?.projectedCampaigns ?? stats?.recorrenciaAnual?.projectedCampaigns ?? 0;
+  const peso = recorrenciaData?.projectedTicketWeight ?? stats?.recorrenciaAnual?.projectedTicketWeight ?? 0;
+  const topSegment = stats?.recorrenciaAnual?.topRecurringSegments?.[0]?.segmento || '—';
+  const list = recorrenciaData?.windowsBySegment || [];
+
+  const campaignsEl = document.getElementById('rec-campaigns');
+  const ticketEl = document.getElementById('rec-ticket');
+  const topSegEl = document.getElementById('rec-top-segment');
+  const listEl = document.getElementById('recorrencia-list');
+  if (!campaignsEl || !ticketEl || !topSegEl || !listEl) return;
+
+  campaignsEl.textContent = Number(campanhas || 0).toLocaleString('pt-BR');
+  ticketEl.textContent = Number(peso || 0).toLocaleString('pt-BR');
+  topSegEl.textContent = topSegment;
+
+  if (!list.length) {
+    listEl.innerHTML = `<div class="recorrencia-empty">Sem dados de janelas no momento.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = list.slice(0, 6).map((item) => {
+    const nextWindow = item.windows?.[0];
+    const nextLabel = nextWindow?.label || 'Sem janela definida';
+    const nextDate = nextWindow?.nextDate ? new Date(nextWindow.nextDate).toLocaleDateString('pt-BR') : '—';
+    return `
+      <div class="rec-row">
+        <div class="rec-seg">${item.segmento}</div>
+        <div class="rec-metrics">
+          <span>${item.projectedCampaigns.toLocaleString('pt-BR')} campanhas</span>
+          <span>Peso ${item.projectedTicketWeight.toLocaleString('pt-BR')}</span>
+        </div>
+        <div class="rec-window">${nextLabel} · ${nextDate}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 /* ─── Leads View ────────────────────────────────────────────── */
