@@ -45,6 +45,15 @@ function clearApiError() {
   if (banner) banner.remove();
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) {
@@ -669,6 +678,260 @@ function initSegmentosView() {
 
 /* ─── Prospecção View & Kanban ────────────────────────────────── */
 let prospeccaoViewInitialized = false;
+let disparoHistorico = [];
+let disparoAprovadoId = '';
+let disparoPreviewGerada = false;
+let disparoTotalElegiveis = 0;
+
+function requiresTemplateApproval(cfg) {
+  return cfg.templateModo === 'custom';
+}
+
+function getDisparoConfig() {
+  const classificacoes = Array.from(document.querySelectorAll('.disparo-classif:checked')).map((el) => el.value);
+  return {
+    classificacoes,
+    limite: Number.parseInt(document.getElementById('disparo-limite').value || '10', 10),
+    limite_preview: Number.parseInt(document.getElementById('disparo-preview-limit').value || '3', 10),
+    templateModo: document.getElementById('disparo-template-modo').value,
+    templateCustom: document.getElementById('disparo-template-custom').value.trim(),
+  };
+}
+
+function markDisparoDirty({ resetApproval = false } = {}) {
+  disparoPreviewGerada = false;
+  disparoTotalElegiveis = 0;
+  if (resetApproval) disparoAprovadoId = '';
+  refreshDisparoConfirmState();
+}
+
+function refreshDisparoConfirmState() {
+  const cfg = getDisparoConfig();
+  const needsApproval = requiresTemplateApproval(cfg);
+  const readyToConfirm = disparoPreviewGerada && disparoTotalElegiveis > 0 && (!needsApproval || Boolean(disparoAprovadoId));
+  document.getElementById('btn-confirmar-disparo').disabled = !readyToConfirm;
+
+  const statusEl = document.getElementById('disparo-approval-status');
+  if (!statusEl) return;
+  if (!needsApproval) {
+    statusEl.textContent = 'Modo IA/padrão: aprovação de versão é opcional.';
+    statusEl.className = 'approval-status';
+    return;
+  }
+  if (!disparoAprovadoId) {
+    statusEl.textContent = 'Template customizado exige versão aprovada para liberar envio.';
+    statusEl.className = 'approval-status pending';
+    return;
+  }
+  statusEl.textContent = `Versão aprovada selecionada (${disparoAprovadoId}).`;
+  statusEl.className = 'approval-status approved';
+}
+
+function applyDisparoConfigToForm(config) {
+  document.getElementById('disparo-template-modo').value = config.templateModo || 'ia';
+  document.getElementById('disparo-limite').value = String(config.limite || 10);
+  document.getElementById('disparo-preview-limit').value = String(config.limitePreview || 3);
+  document.getElementById('disparo-template-custom').value = config.templateCustom || '';
+  const selected = new Set(config.classificacoes || ['🔴 HOT', '🟠 WARM']);
+  document.querySelectorAll('.disparo-classif').forEach((el) => {
+    el.checked = selected.has(el.value);
+  });
+  const isCustom = document.getElementById('disparo-template-modo').value === 'custom';
+  document.getElementById('disparo-template-custom').disabled = !isCustom;
+}
+
+function renderDisparoHistorico() {
+  const box = document.getElementById('disparo-history-list');
+  if (!box) return;
+  if (!disparoHistorico.length) {
+    box.innerHTML = '<div class="ia-loading">Nenhuma versão salva.</div>';
+    return;
+  }
+  box.innerHTML = disparoHistorico.map((v) => `
+    <div class="history-item">
+      <div class="history-title">${escapeHtml(v.nome || 'Versão')}</div>
+      <div class="history-meta">${new Date(v.criadoEm).toLocaleString('pt-BR')} · ${escapeHtml((v.classificacoes || []).join(', ') || '-')}</div>
+      <div class="history-template">${escapeHtml((v.templateCustom || '').slice(0, 160))}</div>
+      <div class="history-actions">
+        <button class="btn btn-clear btn-aplicar-versao" data-version-id="${escapeHtml(v.id)}">Aplicar</button>
+        <button class="btn btn-clear btn-aprovar-versao" data-version-id="${escapeHtml(v.id)}">Aprovar</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function carregarConfigDisparo() {
+  const config = await fetchJson('/api/prospeccao/template-config');
+  disparoHistorico = Array.isArray(config.historico) ? config.historico : [];
+  disparoAprovadoId = config.aprovadoId || '';
+  applyDisparoConfigToForm(config);
+  renderDisparoHistorico();
+  markDisparoDirty();
+}
+
+async function salvarConfigPadraoDisparo() {
+  const cfg = getDisparoConfig();
+  const res = await fetch('/api/prospeccao/template-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      templateModo: cfg.templateModo,
+      templateCustom: cfg.templateCustom,
+      classificacoes: cfg.classificacoes,
+      limite: cfg.limite,
+      limitePreview: cfg.limite_preview,
+    }),
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.error || 'Falha ao salvar configuração');
+  showApiError('Configuração padrão de disparo salva com sucesso.');
+  setTimeout(clearApiError, 2200);
+}
+
+async function salvarVersaoTemplateAtual({ aprovar = false } = {}) {
+  const cfg = getDisparoConfig();
+  if (cfg.templateModo !== 'custom') {
+    alert('O histórico de versões é exclusivo para template customizado.');
+    return null;
+  }
+  if (!cfg.templateCustom) {
+    alert('Preencha o template customizado antes de salvar a versão.');
+    return null;
+  }
+  const nomeSugestao = `Template ${new Date().toLocaleString('pt-BR')}`;
+  const nome = prompt('Nome da versão:', nomeSugestao);
+  if (nome === null) return null;
+
+  const res = await fetch('/api/prospeccao/template-historico', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      nome: nome.trim() || nomeSugestao,
+      templateModo: 'custom',
+      templateCustom: cfg.templateCustom,
+      classificacoes: cfg.classificacoes,
+    }),
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.error || 'Falha ao salvar versão');
+  disparoHistorico = payload.historico || disparoHistorico;
+  renderDisparoHistorico();
+  if (aprovar && payload.versao?.id) {
+    await aprovarVersaoTemplate(payload.versao.id);
+  }
+  return payload.versao || null;
+}
+
+async function aprovarVersaoTemplate(versionId) {
+  const res = await fetch(`/api/prospeccao/template-historico/${encodeURIComponent(versionId)}/aprovar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.error || 'Falha ao aprovar versão');
+  disparoAprovadoId = payload.aprovadoId || '';
+  disparoHistorico = payload.historico || disparoHistorico;
+  renderDisparoHistorico();
+  refreshDisparoConfirmState();
+}
+
+function openDisparoModal() {
+  const modal = document.getElementById('disparo-modal');
+  if (!modal) return;
+  markDisparoDirty();
+  document.getElementById('disparo-preview-list').innerHTML = '<div class="ia-loading">Configure e clique em "Gerar Prévia".</div>';
+  carregarConfigDisparo().catch((err) => {
+    showApiError('Erro ao carregar configuração de disparo: ' + err.message);
+  });
+  modal.classList.add('active');
+}
+
+function closeDisparoModal() {
+  const modal = document.getElementById('disparo-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+async function gerarPreviewDisparo() {
+  const cfg = getDisparoConfig();
+  const previewEl = document.getElementById('disparo-preview-list');
+  if (!cfg.classificacoes.length) {
+    previewEl.innerHTML = '<div class="ia-loading">Selecione ao menos uma classificação alvo.</div>';
+    return;
+  }
+  if (cfg.templateModo === 'custom' && !cfg.templateCustom) {
+    previewEl.innerHTML = '<div class="ia-loading">Informe o template customizado para gerar a prévia.</div>';
+    return;
+  }
+  previewEl.innerHTML = '<div class="ia-loading">Gerando prévia...</div>';
+  markDisparoDirty();
+
+  try {
+    const res = await fetch('/api/prospeccao/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'Falha ao gerar prévia');
+    disparoPreviewGerada = true;
+    disparoTotalElegiveis = payload.totalElegiveis || 0;
+    refreshDisparoConfirmState();
+
+    if (!payload.previews?.length) {
+      previewEl.innerHTML = `<div class="ia-loading">Nenhum lead elegível encontrado para os critérios selecionados.</div>`;
+      return;
+    }
+
+    previewEl.innerHTML = payload.previews.map((p) => `
+      <div class="preview-item">
+        <div class="preview-head">${escapeHtml(p.empresa)} · ${escapeHtml(p.classificacao)} · ${escapeHtml(p.cidade || '—')}</div>
+        <div class="preview-msg">${escapeHtml(p.mensagem || '').replace(/\n/g, '<br/>')}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    previewEl.innerHTML = `<div class="ia-loading">Erro ao gerar prévia: ${err.message}</div>`;
+  }
+}
+
+async function confirmarDisparo() {
+  const cfg = getDisparoConfig();
+  if (!cfg.classificacoes.length) {
+    alert('Selecione ao menos uma classificação.');
+    return;
+  }
+  if (requiresTemplateApproval(cfg) && !disparoAprovadoId) {
+    alert('Aprove uma versão do template customizado antes de confirmar o envio.');
+    return;
+  }
+  if (!disparoPreviewGerada) {
+    alert('Gere a prévia antes de confirmar o envio.');
+    return;
+  }
+  if (!confirm('Confirmar disparo com essa configuração?')) return;
+  try {
+    showApiError('Disparo em execução... acompanhe no Kanban.');
+    const res = await fetch('/api/prospeccao/disparar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        classificacoes: cfg.classificacoes,
+        limite: cfg.limite,
+        templateModo: cfg.templateModo,
+        templateCustom: cfg.templateCustom,
+        templateApprovedId: disparoAprovadoId,
+        requireTemplateApproval: requiresTemplateApproval(cfg),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Falha no disparo');
+    clearApiError();
+    closeDisparoModal();
+    alert(`Disparo finalizado: ${data.disparados || 0} enviados (modo: ${data.templateModo || cfg.templateModo}).`);
+    loadProspeccaoKanban();
+  } catch (err) {
+    showApiError('Erro no disparo: ' + err.message);
+  }
+}
 
 function initProspeccaoView() {
   if (prospeccaoViewInitialized) {
@@ -677,25 +940,77 @@ function initProspeccaoView() {
   }
   prospeccaoViewInitialized = true;
 
-  document.getElementById('btn-disparar-ia').addEventListener('click', async () => {
-    if (!confirm('Deseja iniciar um disparo em lote usando o Gemini (IA)? O processo respeita os limites anti-ban.')) return;
+  document.getElementById('btn-disparar-ia').addEventListener('click', openDisparoModal);
+  document.getElementById('btn-close-disparo').addEventListener('click', closeDisparoModal);
+  document.getElementById('btn-gerar-preview-disparo').addEventListener('click', gerarPreviewDisparo);
+  document.getElementById('btn-confirmar-disparo').addEventListener('click', confirmarDisparo);
+  document.getElementById('btn-salvar-padrao-disparo').addEventListener('click', async () => {
     try {
-      showApiError('Iniciando disparo com IA... acompanhe no painel de Enviados.', false);
-      const res = await fetch('/api/prospeccao/disparar', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limite: 10, usarIA: true }) 
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
-      alert(`Disparo concluído: ${data.disparados} mensagens enviadas!`);
-      clearApiError();
-      loadProspeccaoKanban();
+      await salvarConfigPadraoDisparo();
     } catch (err) {
-      console.error(err);
-      showApiError('Erro no disparo: ' + err.message);
+      showApiError('Erro ao salvar padrão: ' + err.message);
     }
   });
+  document.getElementById('btn-salvar-versao-disparo').addEventListener('click', async () => {
+    try {
+      await salvarVersaoTemplateAtual();
+    } catch (err) {
+      showApiError('Erro ao salvar versão: ' + err.message);
+    }
+  });
+  document.getElementById('btn-aprovar-versao-atual').addEventListener('click', async () => {
+    try {
+      await salvarVersaoTemplateAtual({ aprovar: true });
+      showApiError('Versão atual aprovada com sucesso.');
+      setTimeout(clearApiError, 2200);
+    } catch (err) {
+      showApiError('Erro ao aprovar versão: ' + err.message);
+    }
+  });
+  document.getElementById('disparo-template-modo').addEventListener('change', () => {
+    const isCustom = document.getElementById('disparo-template-modo').value === 'custom';
+    document.getElementById('disparo-template-custom').disabled = !isCustom;
+    if (!isCustom) document.getElementById('disparo-template-custom').value = '';
+    markDisparoDirty({ resetApproval: isCustom });
+  });
+  document.querySelectorAll('.disparo-classif').forEach((el) => el.addEventListener('change', () => {
+    markDisparoDirty({ resetApproval: requiresTemplateApproval(getDisparoConfig()) });
+  }));
+  document.getElementById('disparo-limite').addEventListener('input', () => markDisparoDirty());
+  document.getElementById('disparo-preview-limit').addEventListener('input', () => markDisparoDirty());
+  document.getElementById('disparo-template-custom').addEventListener('input', () => {
+    markDisparoDirty({ resetApproval: true });
+  });
+  document.getElementById('disparo-modal').addEventListener('click', (event) => {
+    if (event.target.id === 'disparo-modal') closeDisparoModal();
+  });
+  document.getElementById('disparo-history-list').addEventListener('click', async (event) => {
+    const btn = event.target.closest('button[data-version-id]');
+    if (!btn) return;
+    const versionId = btn.getAttribute('data-version-id');
+    const versao = disparoHistorico.find((v) => String(v.id) === String(versionId));
+    if (!versao) return;
+    if (btn.classList.contains('btn-aplicar-versao')) {
+      document.getElementById('disparo-template-modo').value = 'custom';
+      document.getElementById('disparo-template-custom').disabled = false;
+      document.getElementById('disparo-template-custom').value = versao.templateCustom || '';
+      const selected = new Set(versao.classificacoes || ['🔴 HOT', '🟠 WARM']);
+      document.querySelectorAll('.disparo-classif').forEach((el) => { el.checked = selected.has(el.value); });
+      markDisparoDirty({ resetApproval: true });
+      return;
+    }
+    if (btn.classList.contains('btn-aprovar-versao')) {
+      try {
+        await aprovarVersaoTemplate(versionId);
+        showApiError('Versão aprovada para envio.');
+        setTimeout(clearApiError, 1800);
+      } catch (err) {
+        showApiError('Erro ao aprovar versão: ' + err.message);
+      }
+    }
+  });
+  document.getElementById('disparo-template-custom').disabled = true;
+  refreshDisparoConfirmState();
 
   loadIaInsights();
   loadProspeccaoKanban();

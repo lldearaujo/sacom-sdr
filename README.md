@@ -75,6 +75,12 @@ npm run smoke:spawn
 - `GET /api/leads/:cnpj/enrichment`: enrichment individual com cache local, TTL e fallback seguro (`force_refresh=true`)
 - `GET /api/enrichment/warmup`: aquece cache de enrichment priorizando segmentos estratégicos (`limit`, `concurrency`, `segmentos`, `force_refresh=true`)
 - `GET /api/oportunidades/recorrencia`: projeção de campanhas anuais e janelas por segmento prioritário
+- `POST /api/prospeccao/preview`: gera prévia das mensagens antes do disparo (`classificacoes`, `limite`, `limite_preview`, `templateModo=ia|padrao|custom`, `templateCustom`)
+- `POST /api/prospeccao/disparar`: executa disparo em lote respeitando horário e limites (`classificacoes`, `limite`, `templateModo`, `templateCustom`)
+- `GET/PUT /api/prospeccao/template-config`: consulta/salva configuração padrão do disparo (modo, limites, classificações e template base)
+- `POST /api/prospeccao/template-historico`: salva uma nova versão de template customizado
+- `POST /api/prospeccao/template-historico/:id/aprovar`: marca versão como aprovada para envio
+- `GET /api/email/status`: status operacional do worker de e-mail IMAP/Trello (conexão, última checagem, contadores)
 
 ## Comportamento de dados
 
@@ -87,6 +93,9 @@ npm run smoke:spawn
 - Controle de concorrencia de enrichment (`MAX_ENRICHMENT_CONCURRENCY`) e cooldown por dominio (`ENRICHMENT_DOMAIN_COOLDOWN_MS`)
 - Warmup diário automático configurável por horário e segmentos prioritários (status disponível em `stats.warmup`)
 - Projeção de recorrência anual por segmento disponível em `stats.recorrenciaAnual`
+- Fluxo de disparo com confirmação: usuário configura o padrão da mensagem, gera prévia e só então confirma o envio
+- Persistência da configuração do modal de disparo e histórico de versões para template customizado com etapa de aprovação
+- Worker de e-mail (IMAP) com deduplicação por `message-id` e hash de conteúdo, classificação IA (`opec|oportunidade|spam`) e criação direta de card Trello para OPEC com anexos
 
 ## Troubleshooting rapido
 

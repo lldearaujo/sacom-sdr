@@ -570,6 +570,63 @@ body {
 .input-row { display: flex; gap: 12px; }
 .input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .input-group label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.checkbox-inline { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text); font-size: 13px; }
+.checkbox-inline input { margin-right: 6px; }
+#disparo-modal .modal-content { width: 980px; max-width: 94vw; }
+.preview-list {
+  min-height: 360px;
+  max-height: 62vh;
+  overflow: auto;
+  background: #0a1020;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.preview-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #0e162a;
+}
+.preview-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: #7dd3fc;
+  margin-bottom: 8px;
+}
+.preview-msg {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: normal;
+}
+.approval-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.approval-status.pending { color: #f59e0b; }
+.approval-status.approved { color: #34d399; }
+.history-list {
+  max-height: 250px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: #0a1020;
+}
+.history-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: #0e162a;
+}
+.history-title { font-weight: 700; font-size: 12px; color: #93c5fd; }
+.history-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.history-template { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text); }
+.history-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 /* ── Logs do Sistema ──────────────────────────────────────────── */
 .system-logs {

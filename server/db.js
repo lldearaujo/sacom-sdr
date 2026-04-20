@@ -116,6 +116,62 @@ async function init() {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS inbound_emails (
+        id                        BIGSERIAL PRIMARY KEY,
+        message_id                TEXT UNIQUE,
+        content_hash              TEXT NOT NULL UNIQUE,
+        from_email                TEXT,
+        subject                   TEXT,
+        body_text                 TEXT,
+        received_at               TIMESTAMPTZ,
+        classification            TEXT,
+        classification_confidence DOUBLE PRECISION,
+        classification_summary    TEXT,
+        classification_fields     JSONB,
+        classification_source     TEXT,
+        needs_review              BOOLEAN DEFAULT FALSE,
+        status                    TEXT NOT NULL DEFAULT 'received',
+        error_message             TEXT,
+        created_at                TIMESTAMPTZ DEFAULT NOW(),
+        updated_at                TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS inbound_emails_status_idx ON inbound_emails (status);
+      CREATE INDEX IF NOT EXISTS inbound_emails_received_idx ON inbound_emails (received_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS inbound_email_attachments (
+        id           BIGSERIAL PRIMARY KEY,
+        email_id     BIGINT NOT NULL REFERENCES inbound_emails(id) ON DELETE CASCADE,
+        file_name    TEXT NOT NULL,
+        mime_type    TEXT,
+        size_bytes   BIGINT,
+        storage_path TEXT,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS inbound_email_attachments_email_idx ON inbound_email_attachments (email_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS opec_requests (
+        id                  BIGSERIAL PRIMARY KEY,
+        inbound_email_id    BIGINT NOT NULL REFERENCES inbound_emails(id) ON DELETE CASCADE,
+        summary             TEXT,
+        company             TEXT,
+        contact_name        TEXT,
+        contact_email       TEXT,
+        request_type        TEXT,
+        requested_deadline  TEXT,
+        trello_card_id      TEXT,
+        trello_card_url     TEXT,
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS opec_requests_email_idx ON opec_requests (inbound_email_id);
+      CREATE INDEX IF NOT EXISTS opec_requests_trello_idx ON opec_requests (trello_card_id);
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS knowledge_base (
         id            SERIAL PRIMARY KEY,
         titulo        TEXT NOT NULL,
@@ -479,6 +535,116 @@ async function getProspeccao(cnpj) {
   return rows[0] || null;
 }
 
+// ─── INBOUND EMAILS / OPEC ────────────────────────────────────────────────────
+
+async function findInboundByMessageId(messageId) {
+  if (!messageId) return null;
+  const { rows } = await pool.query('SELECT * FROM inbound_emails WHERE message_id = $1 LIMIT 1', [messageId]);
+  return rows[0] || null;
+}
+
+async function findInboundByContentHash(contentHash) {
+  if (!contentHash) return null;
+  const { rows } = await pool.query('SELECT * FROM inbound_emails WHERE content_hash = $1 LIMIT 1', [contentHash]);
+  return rows[0] || null;
+}
+
+async function saveInboundEmail({
+  messageId = null,
+  contentHash,
+  fromEmail = null,
+  subject = '',
+  bodyText = '',
+  receivedAt = null,
+}) {
+  const { rows } = await pool.query(`
+    INSERT INTO inbound_emails
+      (message_id, content_hash, from_email, subject, body_text, received_at, status, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, 'received', NOW())
+    RETURNING *
+  `, [messageId, contentHash, fromEmail, subject, bodyText, receivedAt]);
+  return rows[0];
+}
+
+async function saveInboundAttachment(emailId, {
+  fileName,
+  mimeType,
+  sizeBytes,
+  storagePath = null,
+}) {
+  const { rows } = await pool.query(`
+    INSERT INTO inbound_email_attachments
+      (email_id, file_name, mime_type, size_bytes, storage_path)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING *
+  `, [emailId, fileName, mimeType || null, sizeBytes || 0, storagePath]);
+  return rows[0];
+}
+
+async function updateInboundClassification(emailId, classification) {
+  await pool.query(`
+    UPDATE inbound_emails
+    SET
+      classification = $2,
+      classification_confidence = $3,
+      classification_summary = $4,
+      classification_fields = $5,
+      classification_source = $6,
+      needs_review = $7,
+      status = 'classified',
+      error_message = $8,
+      updated_at = NOW()
+    WHERE id = $1
+  `, [
+    emailId,
+    classification.category,
+    classification.confidence,
+    classification.summary || null,
+    JSON.stringify(classification.fields || {}),
+    classification.source || null,
+    classification.needsReview || false,
+    classification.error || null,
+  ]);
+}
+
+async function markInboundStatus(emailId, status, errorMessage = null) {
+  await pool.query(`
+    UPDATE inbound_emails
+    SET status = $2, error_message = $3, updated_at = NOW()
+    WHERE id = $1
+  `, [emailId, status, errorMessage]);
+}
+
+async function saveOpecRequest({
+  inboundEmailId,
+  summary = null,
+  company = null,
+  contactName = null,
+  contactEmail = null,
+  requestType = null,
+  requestedDeadline = null,
+  trelloCardId = null,
+  trelloCardUrl = null,
+}) {
+  const { rows } = await pool.query(`
+    INSERT INTO opec_requests
+      (inbound_email_id, summary, company, contact_name, contact_email, request_type, requested_deadline, trello_card_id, trello_card_url, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+    RETURNING *
+  `, [
+    inboundEmailId,
+    summary,
+    company,
+    contactName,
+    contactEmail,
+    requestType,
+    requestedDeadline,
+    trelloCardId,
+    trelloCardUrl,
+  ]);
+  return rows[0];
+}
+
 // ─── KNOWLEDGE BASE (RAG Treinamento) ──────────────────────────────────────────
 
 async function saveKnowledge(titulo, conteudo, embedding, fonteArquivo) {
@@ -772,6 +938,14 @@ module.exports = {
   getLeadsProspectadosHoje,
   emCooldownDB,
   encontrarCnpjPorNumeroDB,
+  // inbound emails / opec
+  findInboundByMessageId,
+  findInboundByContentHash,
+  saveInboundEmail,
+  saveInboundAttachment,
+  updateInboundClassification,
+  markInboundStatus,
+  saveOpecRequest,
   // analytics
   getStats,
   // system & persistence

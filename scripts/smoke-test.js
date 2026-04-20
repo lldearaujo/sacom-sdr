@@ -11,9 +11,9 @@ async function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function requestJson(pathname) {
+async function requestJson(pathname, options = undefined) {
   const url = `${baseUrl}${pathname}`;
-  const res = await fetch(url);
+  const res = await fetch(url, options);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} em ${url}`);
   }
@@ -78,6 +78,18 @@ function validateLeads(payload) {
   }
 }
 
+function validateEmailStatus(payload) {
+  if (!payload || payload.ok !== true || !payload.status) {
+    throw new Error('Resposta invalida em /api/email/status');
+  }
+  if (typeof payload.status.running !== 'boolean') {
+    throw new Error('Resposta invalida em /api/email/status: campo running ausente');
+  }
+  if (typeof payload.status.connected !== 'boolean') {
+    throw new Error('Resposta invalida em /api/email/status: campo connected ausente');
+  }
+}
+
 async function runSmoke() {
   console.log(`\n[SMOKE] Iniciando validacao em ${baseUrl}`);
 
@@ -132,6 +144,31 @@ async function runSmoke() {
     throw new Error('Resposta invalida em /api/oportunidades/recorrencia');
   }
   console.log('[SMOKE] /api/oportunidades/recorrencia ok');
+
+  const preview = await requestJson('/api/prospeccao/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      classificacoes: ['🔴 HOT', '🟠 WARM'],
+      limite: 5,
+      limite_preview: 2,
+      templateModo: 'padrao',
+    }),
+  });
+  if (!Array.isArray(preview.previews) || typeof preview.totalElegiveis !== 'number') {
+    throw new Error('Resposta invalida em /api/prospeccao/preview');
+  }
+  console.log('[SMOKE] /api/prospeccao/preview ok');
+
+  const tplConfig = await requestJson('/api/prospeccao/template-config');
+  if (!tplConfig || !Array.isArray(tplConfig.classificacoes) || !Array.isArray(tplConfig.historico)) {
+    throw new Error('Resposta invalida em /api/prospeccao/template-config');
+  }
+  console.log('[SMOKE] /api/prospeccao/template-config ok');
+
+  const emailStatus = await requestJson('/api/email/status');
+  validateEmailStatus(emailStatus);
+  console.log('[SMOKE] /api/email/status ok');
 
   console.log('[SMOKE] Todos os checks passaram com sucesso.\n');
 }

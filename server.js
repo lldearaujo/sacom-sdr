@@ -16,6 +16,7 @@ const gemini = require('./server/gemini');
 const whatsapp = require('./server/whatsapp');
 const whatsappInbound = require('./server/whatsapp-inbound');
 const whatsappDebounce = require('./server/whatsapp-debounce');
+const emailInbox = require('./server/email-inbox');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
@@ -400,6 +401,15 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
+app.get('/api/email/status', (req, res) => {
+  try {
+    const status = emailInbox.getEmailWorkerStatus();
+    res.json({ ok: true, status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/system/logs', (req, res) => {
   const limit = req.query.limit || '200';
   const level = req.query.level || '';
@@ -599,6 +609,211 @@ app.get('/api/enrichment/warmup', (req, res) => {
 
 // ─── APIs Prospecção ─────────────────────────────────────────────────────────
 
+const PROSPECCAO_TEMPLATE_SETTING_KEYS = {
+  templateModo: 'PROSPECCAO_TEMPLATE_MODO_PADRAO',
+  templateCustom: 'PROSPECCAO_TEMPLATE_CUSTOM_PADRAO',
+  classificacoes: 'PROSPECCAO_TEMPLATE_CLASSIFICACOES_PADRAO',
+  limite: 'PROSPECCAO_TEMPLATE_LIMITE_PADRAO',
+  limitePreview: 'PROSPECCAO_TEMPLATE_PREVIEW_LIMITE_PADRAO',
+  historico: 'PROSPECCAO_TEMPLATE_HISTORICO',
+  aprovadoId: 'PROSPECCAO_TEMPLATE_APROVADO_ID',
+};
+
+function safeParseJson(value, fallback) {
+  try {
+    if (!value) return fallback;
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function toTemplateSignature({ templateModo, templateCustom }) {
+  return `${String(templateModo || '').trim()}::${String(templateCustom || '').trim()}`;
+}
+
+async function getProspeccaoTemplateConfig() {
+  const settings = dbReady ? await db.getSettings().catch(() => ({})) : {};
+  const getVal = (key, fallback = '') => settings[key] ?? process.env[key] ?? fallback;
+  const classificacoes = safeParseJson(
+    getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.classificacoes, '["🔴 HOT","🟠 WARM"]'),
+    ['🔴 HOT', '🟠 WARM'],
+  );
+  const historico = safeParseJson(getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.historico, '[]'), []);
+  const templateModo = normalizarModoMensagem({ templateModo: getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.templateModo, 'ia'), usarIA: true });
+  const templateCustom = String(getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.templateCustom, ''));
+  const aprovadoId = String(getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.aprovadoId, '') || '');
+  const limite = Number.parseInt(getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.limite, '10'), 10) || 10;
+  const limitePreview = Number.parseInt(getVal(PROSPECCAO_TEMPLATE_SETTING_KEYS.limitePreview, '3'), 10) || 3;
+  return {
+    templateModo,
+    templateCustom,
+    classificacoes: Array.isArray(classificacoes) ? classificacoes : ['🔴 HOT', '🟠 WARM'],
+    limite,
+    limitePreview,
+    historico: Array.isArray(historico) ? historico.slice(0, 30) : [],
+    aprovadoId,
+  };
+}
+
+async function persistProspeccaoTemplateConfig(config) {
+  const pairs = [
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.templateModo, config.templateModo],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.templateCustom, config.templateCustom || ''],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.classificacoes, JSON.stringify(config.classificacoes || ['🔴 HOT', '🟠 WARM'])],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.limite, String(config.limite || 10)],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.limitePreview, String(config.limitePreview || 3)],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.historico, JSON.stringify((config.historico || []).slice(0, 30))],
+    [PROSPECCAO_TEMPLATE_SETTING_KEYS.aprovadoId, config.aprovadoId || ''],
+  ];
+  for (const [key, value] of pairs) {
+    process.env[key] = String(value ?? '');
+    if (dbReady) await db.saveSetting(key, String(value ?? ''));
+  }
+}
+
+function normalizarModoMensagem({ templateModo, usarIA }) {
+  if (templateModo === 'custom' || templateModo === 'padrao' || templateModo === 'ia') return templateModo;
+  return usarIA === false ? 'padrao' : 'ia';
+}
+
+async function selecionarLeadsParaProspeccao({ classificacoes, limite }) {
+  const leadsRaw = await db.queryLeads({ limit: limite * 5, page: 1, order_by: 'score_comercial' });
+  return leadsRaw.data.filter(
+    (l) => classificacoes.includes(l.classificacao) && (l.telefone1 || l.telefone2),
+  );
+}
+
+app.get('/api/prospeccao/template-config', async (req, res) => {
+  try {
+    const config = await getProspeccaoTemplateConfig();
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/prospeccao/template-config', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const prev = await getProspeccaoTemplateConfig();
+    const next = {
+      ...prev,
+      templateModo: normalizarModoMensagem({ templateModo: payload.templateModo ?? prev.templateModo, usarIA: true }),
+      templateCustom: String(payload.templateCustom ?? prev.templateCustom ?? ''),
+      classificacoes: Array.isArray(payload.classificacoes) && payload.classificacoes.length ? payload.classificacoes : prev.classificacoes,
+      limite: Number.parseInt(payload.limite ?? prev.limite, 10) || 10,
+      limitePreview: Number.parseInt(payload.limitePreview ?? prev.limitePreview, 10) || 3,
+    };
+    await persistProspeccaoTemplateConfig(next);
+    res.json({ ok: true, config: next });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/prospeccao/template-historico', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const config = await getProspeccaoTemplateConfig();
+    const templateModo = normalizarModoMensagem({ templateModo: payload.templateModo, usarIA: true });
+    const templateCustom = String(payload.templateCustom || '');
+    if (templateModo !== 'custom' || !templateCustom.trim()) {
+      return res.status(400).json({ error: 'Somente template customizado pode gerar versão no histórico.' });
+    }
+
+    const novaVersao = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      nome: String(payload.nome || 'Versão sem nome').slice(0, 120),
+      templateModo: 'custom',
+      templateCustom: templateCustom.trim(),
+      classificacoes: Array.isArray(payload.classificacoes) && payload.classificacoes.length ? payload.classificacoes : config.classificacoes,
+      assinatura: toTemplateSignature({ templateModo: 'custom', templateCustom }),
+      criadoEm: new Date().toISOString(),
+      aprovadoEm: null,
+    };
+    const historico = [novaVersao, ...(config.historico || [])].slice(0, 30);
+    await persistProspeccaoTemplateConfig({
+      ...config,
+      historico,
+    });
+    res.json({ ok: true, versao: novaVersao, historico });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/prospeccao/template-historico/:id/aprovar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const config = await getProspeccaoTemplateConfig();
+    const historico = (config.historico || []).map((v) => (
+      v.id === id ? { ...v, aprovadoEm: new Date().toISOString() } : v
+    ));
+    const versao = historico.find((v) => v.id === id);
+    if (!versao) return res.status(404).json({ error: 'Versão não encontrada.' });
+
+    await persistProspeccaoTemplateConfig({
+      ...config,
+      aprovadoId: versao.id,
+      templateModo: versao.templateModo,
+      templateCustom: versao.templateCustom,
+      classificacoes: versao.classificacoes && versao.classificacoes.length ? versao.classificacoes : config.classificacoes,
+      historico,
+    });
+    res.json({ ok: true, aprovadoId: versao.id, versao, historico });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/prospeccao/preview', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  try {
+    const {
+      classificacoes = ['🔴 HOT', '🟠 WARM'],
+      limite = 10,
+      limite_preview = 5,
+      usarIA = true,
+      templateModo = null,
+      templateCustom = '',
+    } = req.body || {};
+
+    const modoMensagem = normalizarModoMensagem({ templateModo, usarIA });
+    const leads = await selecionarLeadsParaProspeccao({
+      classificacoes,
+      limite: Number.parseInt(limite, 10) || 10,
+    });
+    const previewLeads = leads.slice(0, Math.max(1, Math.min(Number.parseInt(limite_preview, 10) || 5, 10)));
+    const gerarMensagemFn = modoMensagem === 'ia' ? gemini.gerarMensagemProspeccao : null;
+
+    const previews = await Promise.all(
+      previewLeads.map(async (lead) => ({
+        cnpj: lead.cnpj,
+        empresa: lead.fantasia || lead.razao || lead.cnpj,
+        cidade: lead.cidade,
+        classificacao: lead.classificacao,
+        pacote: lead.pacoteSugerido || lead.pacote_sugerido || '',
+        mensagem: await whatsapp.gerarMensagemParaLead(lead, {
+          gerarMensagemFn,
+          templateModo: modoMensagem,
+          templateCustom,
+        }),
+      })),
+    );
+
+    res.json({
+      templateModo: modoMensagem,
+      templateCustom: modoMensagem === 'custom' ? templateCustom : '',
+      totalElegiveis: leads.length,
+      totalPreview: previews.length,
+      previews,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/prospeccao/disparar', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
@@ -606,17 +821,41 @@ app.post('/api/prospeccao/disparar', async (req, res) => {
       classificacoes = ['🔴 HOT', '🟠 WARM'],
       limite = 10,
       usarIA = true,
+      templateModo = null,
+      templateCustom = '',
+      templateApprovedId = '',
+      requireTemplateApproval = false,
     } = req.body || {};
+    const modoMensagem = normalizarModoMensagem({ templateModo, usarIA });
 
-    // Pega leads baseados na classe e que não estejam em cooldown
-    const leadsRaw = await db.queryLeads({ limit: limite * 5 }); // pega sobra pra filtrar
-    const selecionados = leadsRaw.data.filter(
-      l => classificacoes.includes(l.classificacao) && (l.telefone1 || l.telefone2)
-    );
+    if (modoMensagem === 'custom' && requireTemplateApproval) {
+      const savedConfig = await getProspeccaoTemplateConfig();
+      const approved = (savedConfig.historico || []).find((v) => v.id === templateApprovedId);
+      if (!approved) {
+        return res.status(400).json({ error: 'Template customizado precisa de versão aprovada.' });
+      }
+      const sameTemplate = toTemplateSignature({ templateModo: 'custom', templateCustom }) === approved.assinatura;
+      if (!sameTemplate) {
+        return res.status(400).json({ error: 'Template customizado não corresponde à versão aprovada.' });
+      }
+    }
 
-    const gerarMensagemFn = usarIA ? gemini.gerarMensagemProspeccao : null;
-    const resultado = await whatsapp.dispararLote(selecionados, { limite, gerarMensagemFn });
-    res.json(resultado);
+    const selecionados = await selecionarLeadsParaProspeccao({
+      classificacoes,
+      limite: Number.parseInt(limite, 10) || 10,
+    });
+
+    const gerarMensagemFn = modoMensagem === 'ia' ? gemini.gerarMensagemProspeccao : null;
+    const resultado = await whatsapp.dispararLote(selecionados, {
+      limite: Number.parseInt(limite, 10) || 10,
+      gerarMensagemFn,
+      templateModo: modoMensagem,
+      templateCustom,
+    });
+    res.json({
+      ...resultado,
+      templateModo: modoMensagem,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1022,6 +1261,15 @@ async function startServer() {
       }
     }
 
+    const emailWorkerEnabled = String(process.env.EMAIL_WORKER_ENABLED || 'true').toLowerCase() !== 'false';
+    if (emailWorkerEnabled) {
+      emailInbox.startEmailWorker({ db })
+        .then(() => console.log('[EmailWorker] Rotina de caixa de entrada iniciada.'))
+        .catch((err) => console.error('[EmailWorker] Falha ao iniciar rotina de e-mail:', err.message));
+    } else {
+      console.log('[EmailWorker] Desabilitado por EMAIL_WORKER_ENABLED=false');
+    }
+
   } catch (err) {
     dbReady = false;
     console.error('⚠️ Banco indisponível. Subindo API em modo degradado.', err.message);
@@ -1038,4 +1286,23 @@ async function startServer() {
 startServer().catch(err => {
   console.error('Falha fatal ao iniciar servidor:', err);
   process.exit(1);
+});
+
+async function shutdown(signal) {
+  console.log(`[Shutdown] Recebido ${signal}, encerrando serviços...`);
+  try {
+    await emailInbox.stopEmailWorker();
+  } catch (err) {
+    console.error('[Shutdown] Erro ao encerrar rotina de e-mail:', err.message);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => {
+  shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
 });

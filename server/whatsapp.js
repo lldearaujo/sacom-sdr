@@ -154,8 +154,54 @@ async function enviarMidiasCatalogo(numero, mediaKeys) {
   return { enviados };
 }
 
+function renderTemplateMensagem(template, lead) {
+  const agente = process.env.BDR_AGENTE_NOME || 'Lourdes';
+  const empresa = lead.fantasia || lead.razao || 'sua empresa';
+  const variables = {
+    agente,
+    empresa,
+    cnpj: lead.cnpj || '',
+    cidade: lead.cidade || '',
+    segmento: lead.segmentoPrioritario || lead.segmento || '',
+    classificacao: lead.classificacao || '',
+    dor: lead.dor_principal || lead.dorPrincipal || '',
+    oferta: lead.oferta_principal || lead.ofertaPrincipal || '',
+    pacote: lead.pacote_sugerido || lead.pacoteSugerido || '',
+    discurso: lead.discurso_consultivo || lead.discursoConsultivo || '',
+  };
+  return String(template || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+    if (Object.prototype.hasOwnProperty.call(variables, key)) return String(variables[key] || '');
+    return '';
+  }).trim();
+}
+
+async function gerarMensagemParaLead(lead, {
+  gerarMensagemFn = null,
+  templateModo = 'ia',
+  templateCustom = '',
+} = {}) {
+  if (templateModo === 'custom' && templateCustom) {
+    const rendered = renderTemplateMensagem(templateCustom, lead);
+    return rendered || templatePadrao(lead);
+  }
+
+  if (templateModo === 'padrao') return templatePadrao(lead);
+
+  try {
+    return gerarMensagemFn ? await gerarMensagemFn(lead) : templatePadrao(lead);
+  } catch (err) {
+    console.warn(`Erro ao gerar mensagem IA para ${lead.cnpj}:`, err.message);
+    return templatePadrao(lead);
+  }
+}
+
 // ─── Disparo de lote de leads ─────────────────────────────────────────────────
-async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
+async function dispararLote(leads, {
+  limite = 10,
+  gerarMensagemFn = null,
+  templateModo = 'ia',
+  templateCustom = '',
+} = {}) {
   if (!isHorarioComercial()) {
     return { ignorado: true, motivo: 'Fora do horário comercial (Seg–Sex 8h–18h)' };
   }
@@ -193,15 +239,11 @@ async function dispararLote(leads, { limite = 10, gerarMensagemFn } = {}) {
       continue;
     }
 
-    let mensagem;
-    try {
-      mensagem = gerarMensagemFn
-        ? await gerarMensagemFn(lead)
-        : templatePadrao(lead);
-    } catch (err) {
-      console.warn(`Erro ao gerar mensagem para ${lead.cnpj}:`, err.message);
-      mensagem = templatePadrao(lead);
-    }
+    const mensagem = await gerarMensagemParaLead(lead, {
+      gerarMensagemFn,
+      templateModo,
+      templateCustom,
+    });
 
     // Pega os dados anteriores de prospecção do DB pra atualizar tentativas
     const prospData = await db.getProspeccao(lead.cnpj) || { tentativas: 0 };
@@ -266,6 +308,8 @@ module.exports = {
   enviarMidia,
   enviarMidiasCatalogo,
   dispararLote,
+  gerarMensagemParaLead,
+  renderTemplateMensagem,
   formatarNumero,
   encontrarCnpjPorNumero,
   isHorarioComercial,
