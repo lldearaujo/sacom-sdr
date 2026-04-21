@@ -14,6 +14,8 @@ const {
 const state = {
   running: false,
   connected: false,
+  suspended: false,
+  suspendedReason: null,
   lastCheckAt: null,
   lastProcessedAt: null,
   processedCount: 0,
@@ -50,7 +52,30 @@ function getConfig() {
     maxAttachmentMb: Math.max(1, Number.parseInt(process.env.EMAIL_MAX_ATTACHMENT_MB || '15', 10)),
     markSeenAfterProcess: parseBooleanEnv(process.env.EMAIL_MARK_SEEN_AFTER_PROCESS, true),
     tlsRejectUnauthorized: parseBooleanEnv(process.env.EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED, true),
+    stopOnAuthFailure: parseBooleanEnv(process.env.EMAIL_IMAP_STOP_ON_AUTH_FAILURE, true),
   };
+}
+
+function isAuthFailureError(err) {
+  if (!err) return false;
+  const serverCode = String(err.serverResponseCode || '').toUpperCase();
+  const imapStatus = String(err.responseStatus || '').toUpperCase();
+  const authFlag = Boolean(err.authenticationFailed);
+  const text = `${String(err.message || '')} ${String(err.responseText || '')} ${String(err.response || '')}`.toLowerCase();
+  if (authFlag) return true;
+  if (serverCode.includes('AUTHENTICATIONFAILED')) return true;
+  if (imapStatus === 'NO' && text.includes('authentication failed')) return true;
+  return text.includes('auth') && text.includes('failed');
+}
+
+function suspendWorker(reason) {
+  shouldRun = false;
+  clearTimers();
+  state.running = false;
+  state.connected = false;
+  state.suspended = true;
+  state.suspendedReason = reason || 'Suspenso por erro de autenticação IMAP.';
+  console.error('[EmailWorker] Worker suspenso:', state.suspendedReason);
 }
 
 function updateError(err) {
@@ -294,10 +319,17 @@ async function connect() {
   client.on('error', (err) => {
     state.connected = false;
     updateError(err);
+    if (getConfig().stopOnAuthFailure && isAuthFailureError(err)) {
+      suspendWorker('Falha de autenticação IMAP. Verifique EMAIL_IMAP_USER/EMAIL_IMAP_PASS e reinicie o servidor.');
+      return;
+    }
     scheduleReconnect();
   });
   client.on('close', () => {
+    const wasConnected = state.connected;
     state.connected = false;
+    if (!shouldRun) return;
+    if (!wasConnected) return;
     console.warn('[EmailWorker] Conexão IMAP encerrada.');
     scheduleReconnect();
   });
@@ -324,6 +356,8 @@ async function startEmailWorker({ db }) {
   shouldRun = true;
   dbRef = db;
   state.running = true;
+  state.suspended = false;
+  state.suspendedReason = null;
   try {
     trello.assertConfigured();
   } catch (err) {
@@ -331,7 +365,17 @@ async function startEmailWorker({ db }) {
     shouldRun = false;
     throw err;
   }
-  await connect();
+  try {
+    await connect();
+  } catch (err) {
+    if (getConfig().stopOnAuthFailure && isAuthFailureError(err)) {
+      suspendWorker('Falha de autenticação IMAP no startup. Corrija EMAIL_IMAP_USER/EMAIL_IMAP_PASS e reinicie o servidor.');
+    } else {
+      state.running = false;
+      shouldRun = false;
+    }
+    throw err;
+  }
 }
 
 async function stopEmailWorker() {
@@ -347,6 +391,8 @@ async function stopEmailWorker() {
   client = null;
   state.running = false;
   state.connected = false;
+  state.suspended = false;
+  state.suspendedReason = null;
 }
 
 function getEmailWorkerStatus() {

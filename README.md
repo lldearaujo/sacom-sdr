@@ -105,3 +105,4 @@ npm run smoke:spawn
 - Se a tela mostrar erro de API, confirme que o servidor esta rodando (`npm run start`)
 - Se faltar dados, verifique se existem CSVs na pasta `Fontes`
 - Se o `EmailWorker` falhar com erro TLS/certificado (`SELF_SIGNED_CERT_IN_CHAIN`), ajuste `EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED=false` no `.env`
+- Se aparecer `AUTHENTICATIONFAILED`, corrija `EMAIL_IMAP_USER/EMAIL_IMAP_PASS`; por padrão o worker entra em modo suspenso para evitar loop de logs (`EMAIL_IMAP_STOP_ON_AUTH_FAILURE=true`)
