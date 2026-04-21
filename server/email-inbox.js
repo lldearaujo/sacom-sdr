@@ -28,6 +28,7 @@ let client = null;
 let pollTimer = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
+let consecutiveConnectFailures = 0;
 let isPolling = false;
 let shouldRun = false;
 let dbRef = null;
@@ -53,6 +54,7 @@ function getConfig() {
     markSeenAfterProcess: parseBooleanEnv(process.env.EMAIL_MARK_SEEN_AFTER_PROCESS, true),
     tlsRejectUnauthorized: parseBooleanEnv(process.env.EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED, true),
     stopOnAuthFailure: parseBooleanEnv(process.env.EMAIL_IMAP_STOP_ON_AUTH_FAILURE, true),
+    maxConsecutiveFailuresBeforeSuspend: Math.max(1, Number.parseInt(process.env.EMAIL_IMAP_MAX_CONSECUTIVE_FAILURES || '3', 10)),
   };
 }
 
@@ -76,6 +78,29 @@ function suspendWorker(reason) {
   state.suspended = true;
   state.suspendedReason = reason || 'Suspenso por erro de autenticação IMAP.';
   console.error('[EmailWorker] Worker suspenso:', state.suspendedReason);
+}
+
+function hasAuthFailureInState() {
+  const text = String(state.lastError || '').toLowerCase();
+  return text.includes('authentication failed')
+    || text.includes('authenticationfailed')
+    || text.includes('server_code=authenticationfailed');
+}
+
+function handleConnectionFailure(err, source = 'connect') {
+  const cfg = getConfig();
+  consecutiveConnectFailures += 1;
+  if (cfg.stopOnAuthFailure && (isAuthFailureError(err) || hasAuthFailureInState())) {
+    suspendWorker(`Falha de autenticação IMAP detectada (${source}). Verifique EMAIL_IMAP_USER/EMAIL_IMAP_PASS e reinicie o servidor.`);
+    return true;
+  }
+  if (consecutiveConnectFailures >= cfg.maxConsecutiveFailuresBeforeSuspend) {
+    suspendWorker(
+      `Conexão IMAP falhou ${consecutiveConnectFailures} vezes seguidas (${source}). Worker pausado para evitar loop de erros.`,
+    );
+    return true;
+  }
+  return false;
 }
 
 function updateError(err) {
@@ -319,10 +344,7 @@ async function connect() {
   client.on('error', (err) => {
     state.connected = false;
     updateError(err);
-    if (getConfig().stopOnAuthFailure && isAuthFailureError(err)) {
-      suspendWorker('Falha de autenticação IMAP. Verifique EMAIL_IMAP_USER/EMAIL_IMAP_PASS e reinicie o servidor.');
-      return;
-    }
+    if (handleConnectionFailure(err, 'event:error')) return;
     scheduleReconnect();
   });
   client.on('close', () => {
@@ -340,6 +362,7 @@ async function connect() {
   await client.connect();
   await client.mailboxOpen(cfg.mailbox);
   state.connected = true;
+  consecutiveConnectFailures = 0;
   reconnectAttempt = 0;
   console.log(`[EmailWorker] Conectado ao IMAP (${cfg.mailbox}).`);
 
@@ -368,9 +391,7 @@ async function startEmailWorker({ db }) {
   try {
     await connect();
   } catch (err) {
-    if (getConfig().stopOnAuthFailure && isAuthFailureError(err)) {
-      suspendWorker('Falha de autenticação IMAP no startup. Corrija EMAIL_IMAP_USER/EMAIL_IMAP_PASS e reinicie o servidor.');
-    } else {
+    if (!handleConnectionFailure(err, 'startup')) {
       state.running = false;
       shouldRun = false;
     }
@@ -391,6 +412,8 @@ async function stopEmailWorker() {
   client = null;
   state.running = false;
   state.connected = false;
+  consecutiveConnectFailures = 0;
+  reconnectAttempt = 0;
   state.suspended = false;
   state.suspendedReason = null;
 }

@@ -106,3 +106,4 @@ npm run smoke:spawn
 - Se faltar dados, verifique se existem CSVs na pasta `Fontes`
 - Se o `EmailWorker` falhar com erro TLS/certificado (`SELF_SIGNED_CERT_IN_CHAIN`), ajuste `EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED=false` no `.env`
 - Se aparecer `AUTHENTICATIONFAILED`, corrija `EMAIL_IMAP_USER/EMAIL_IMAP_PASS`; por padrão o worker entra em modo suspenso para evitar loop de logs (`EMAIL_IMAP_STOP_ON_AUTH_FAILURE=true`)
+- Se o ambiente já exporta variáveis, `dotenv` pode carregar `0` itens (`injecting env (0) from .env`); nesse caso ajuste credenciais IMAP no ambiente de execução (container/painel), não apenas no arquivo `.env`
