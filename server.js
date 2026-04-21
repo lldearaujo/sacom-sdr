@@ -17,6 +17,7 @@ const whatsapp = require('./server/whatsapp');
 const whatsappInbound = require('./server/whatsapp-inbound');
 const whatsappDebounce = require('./server/whatsapp-debounce');
 const emailInbox = require('./server/email-inbox');
+const aiObs = require('./server/ai-observability');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT, 10) || 3000;
@@ -405,6 +406,62 @@ app.get('/api/email/status', (req, res) => {
   try {
     const status = emailInbox.getEmailWorkerStatus();
     res.json({ ok: true, status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/email/poll', async (req, res) => {
+  try {
+    const status = await emailInbox.triggerManualPoll();
+    res.json({ ok: true, status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/email/inbound', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  try {
+    const limit = Math.max(1, Math.min(Number.parseInt(req.query.limit || '30', 10), 200));
+    const page = Math.max(1, Number.parseInt(req.query.page || '1', 10));
+    const offset = (page - 1) * limit;
+    const status = req.query.status ? String(req.query.status) : null;
+    const classification = req.query.classification ? String(req.query.classification) : null;
+    const needsReviewRaw = req.query.needs_review;
+    const needsReview = needsReviewRaw === undefined
+      ? null
+      : String(needsReviewRaw).toLowerCase() === 'true';
+
+    const entries = await db.listInboundEmails({
+      limit,
+      offset,
+      status,
+      classification,
+      needsReview,
+    });
+
+    res.json({
+      ok: true,
+      page,
+      limit,
+      total: entries.length,
+      entries,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.patch('/api/email/inbound/:id/review', async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'ID inválido.' });
+    const needsReview = String(req.body?.needsReview ?? 'false').toLowerCase() === 'true';
+    const updated = await db.setInboundNeedsReview(id, needsReview);
+    if (!updated) return res.status(404).json({ ok: false, error: 'Registro não encontrado.' });
+    res.json({ ok: true, entry: updated });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -1030,6 +1087,35 @@ app.post('/api/prospeccao/webhook', async (req, res) => {
 
 // ─── APIs AI & Insights ────────────────────────────────────────────────────────
 
+app.get('/api/ai/monitor', (req, res) => {
+  try {
+    const limit = Number.parseInt(req.query.limit || '80', 10);
+    const flow = req.query.flow ? String(req.query.flow) : '';
+    const status = req.query.status ? String(req.query.status) : '';
+    const channel = req.query.channel ? String(req.query.channel) : '';
+    const traces = aiObs.listTraces({ limit, flow, status, channel });
+    const summary = aiObs.getSummary();
+    res.json({
+      ok: true,
+      summary,
+      total: traces.length,
+      traces,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/ai/monitor/:id', (req, res) => {
+  try {
+    const trace = aiObs.getTraceById(req.params.id);
+    if (!trace) return res.status(404).json({ ok: false, error: 'Trace não encontrado.' });
+    res.json({ ok: true, trace });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/ai/insights', async (req, res) => {
   if (!dbReady) return res.status(503).json({ error: 'Banco de dados indisponível (DATABASE_URL). O servidor está em modo degradado.' });
   try {
@@ -1265,7 +1351,15 @@ async function startServer() {
     if (emailWorkerEnabled) {
       emailInbox.startEmailWorker({ db })
         .then(() => console.log('[EmailWorker] Rotina de caixa de entrada iniciada.'))
-        .catch((err) => console.error('[EmailWorker] Falha ao iniciar rotina de e-mail:', err.message));
+        .catch((err) => {
+          const details = [];
+          if (err && err.code) details.push(`code=${err.code}`);
+          if (err && err.responseStatus) details.push(`imap_status=${err.responseStatus}`);
+          if (err && err.responseText) details.push(`imap_response=${String(err.responseText).slice(0, 300)}`);
+          if (err && err.serverResponseCode) details.push(`server_code=${err.serverResponseCode}`);
+          const suffix = details.length ? ` (${details.join(', ')})` : '';
+          console.error('[EmailWorker] Falha ao iniciar rotina de e-mail:', `${err.message}${suffix}`);
+        });
     } else {
       console.log('[EmailWorker] Desabilitado por EMAIL_WORKER_ENABLED=false');
     }

@@ -81,6 +81,9 @@ npm run smoke:spawn
 - `POST /api/prospeccao/template-historico`: salva uma nova versão de template customizado
 - `POST /api/prospeccao/template-historico/:id/aprovar`: marca versão como aprovada para envio
 - `GET /api/email/status`: status operacional do worker de e-mail IMAP/Trello (conexão, última checagem, contadores)
+- `GET /api/email/inbound`: lista de e-mails processados para gestão operacional (filtros: `status`, `classification`, `needs_review`, `page`, `limit`)
+- `PATCH /api/email/inbound/:id/review`: marca item como pendente/revisado manualmente
+- `POST /api/email/poll`: força varredura imediata da caixa IMAP
 
 ## Comportamento de dados
 
@@ -101,3 +104,4 @@ npm run smoke:spawn
 
 - Se a tela mostrar erro de API, confirme que o servidor esta rodando (`npm run start`)
 - Se faltar dados, verifique se existem CSVs na pasta `Fontes`
+- Se o `EmailWorker` falhar com erro TLS/certificado (`SELF_SIGNED_CERT_IN_CHAIN`), ajuste `EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED=false` no `.env`

@@ -2,17 +2,46 @@
 
 const rag = require('./rag');
 const { trunc } = require('./token-utils');
+const aiObs = require('./ai-observability');
 
 // No novo fluxo RAG + Banco de Dados, a lógica agora passa pela engine RAG.
 // Vamos manter os mapeamentos compatíveis com o resto do código.
 
 async function processarRespostaLead(lead, mensagemDoLead) {
-  // Passa para a nova engine RAG que já gerencia contexto e histórico (Redis/PG)
-  return await rag.processarMensagemRAG(lead, mensagemDoLead);
+  const traceId = aiObs.startTrace({
+    flow: 'whatsapp_rag_response',
+    channel: 'whatsapp',
+    leadCnpj: lead && lead.cnpj,
+    leadName: lead && (lead.fantasia || lead.razao),
+    inputPreview: typeof mensagemDoLead === 'string' ? mensagemDoLead : (mensagemDoLead?.text || ''),
+  });
+  aiObs.addStep(traceId, { stage: 'rag', status: 'running', message: 'Processando mensagem com contexto RAG.' });
+  try {
+    // Passa para a nova engine RAG que já gerencia contexto e histórico (Redis/PG)
+    const result = await rag.processarMensagemRAG(lead, mensagemDoLead, { traceId });
+    aiObs.finishTrace(traceId, {
+      status: 'ok',
+      outputPreview: result && result.resposta,
+    });
+    return result;
+  } catch (err) {
+    aiObs.finishTrace(traceId, {
+      status: 'error',
+      error: err && err.message,
+    });
+    throw err;
+  }
 }
 
 // ─── Gera mensagem de prospecção inicial personalizada com IA ─────────────────
 async function gerarMensagemProspeccao(lead) {
+  const traceId = aiObs.startTrace({
+    flow: 'prospeccao_mensagem',
+    channel: 'whatsapp',
+    leadCnpj: lead && lead.cnpj,
+    leadName: lead && (lead.fantasia || lead.razao),
+    inputPreview: `Lead ${lead?.cnpj || ''} ${lead?.fantasia || lead?.razao || ''}`,
+  });
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   
@@ -35,11 +64,24 @@ Oferta: ${trunc(lead.oferta_principal || lead.ofertaPrincipal, 120)}
 Pitch: ${trunc(lead.discurso_consultivo || lead.discursoConsultivo, 200)}
 Assinar: ${agente} — SA Comunicação.`;
 
-  const result = await model.generateContent(prompt);
-  return result.response.text().trim();
+  aiObs.addStep(traceId, { stage: 'gemini_generate', status: 'running', message: 'Gerando mensagem inicial de prospecção.' });
+  try {
+    const result = await model.generateContent(prompt);
+    const message = result.response.text().trim();
+    aiObs.finishTrace(traceId, { status: 'ok', outputPreview: message });
+    return message;
+  } catch (err) {
+    aiObs.finishTrace(traceId, { status: 'error', error: err && err.message });
+    throw err;
+  }
 }
 
 async function analisarLeadsComIA(leads) {
+  const traceId = aiObs.startTrace({
+    flow: 'insights_estrategicos',
+    channel: 'dashboard',
+    inputPreview: `Analise de ${Array.isArray(leads) ? leads.length : 0} leads.`,
+  });
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({
@@ -60,17 +102,31 @@ async function analisarLeadsComIA(leads) {
 Leads:
 ${resumo}`;
 
-  const result = await model.generateContent(prompt);
-  const texto = result.response.text().trim();
-
+  aiObs.addStep(traceId, { stage: 'gemini_insights', status: 'running', message: 'Gerando insights estratégicos.' });
   try {
-    return JSON.parse(texto);
-  } catch {
-    const match = texto.match(/\{[\s\S]+\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch { /* ignora */ }
+    const result = await model.generateContent(prompt);
+    const texto = result.response.text().trim();
+
+    try {
+      const parsed = JSON.parse(texto);
+      aiObs.finishTrace(traceId, { status: 'ok', outputPreview: JSON.stringify(parsed) });
+      return parsed;
+    } catch {
+      const match = texto.match(/\{[\s\S]+\}/);
+      if (match) {
+        try {
+          const parsed = JSON.parse(match[0]);
+          aiObs.finishTrace(traceId, { status: 'ok', outputPreview: JSON.stringify(parsed) });
+          return parsed;
+        } catch { /* ignora */ }
+      }
+      const fallback = { raw: texto, erro: 'Falha ao parsear JSON do Gemini' };
+      aiObs.finishTrace(traceId, { status: 'fallback', outputPreview: texto, fallbackUsed: true, error: fallback.erro });
+      return fallback;
     }
-    return { raw: texto, erro: 'Falha ao parsear JSON do Gemini' };
+  } catch (err) {
+    aiObs.finishTrace(traceId, { status: 'error', error: err && err.message });
+    throw err;
   }
 }
 

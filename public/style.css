@@ -644,6 +644,48 @@ body {
   overflow: auto;
 }
 
+/* ── Inbox OPEC ───────────────────────────────────────────────── */
+#view-email-ops .leads-table td,
+#view-email-ops .leads-table th {
+  vertical-align: middle;
+}
+
+#view-email-ops .leads-table td:nth-child(4),
+#view-email-ops .leads-table td:nth-child(5) {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-email-review {
+  font-size: 11px;
+  padding: 6px 10px;
+}
+
+/* ── Monitor IA ──────────────────────────────────────────────── */
+.ai-monitor-row {
+  cursor: pointer;
+}
+
+.ai-monitor-row.active {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.ai-monitor-detail {
+  background: #060913;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+
 /* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

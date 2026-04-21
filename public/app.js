@@ -24,6 +24,14 @@ let segmentList = [];
 let leadsViewInitialized = false;
 let leadsIndexByCnpj = new Map();
 let recorrenciaData = null;
+let aiMonitorInitialized = false;
+let aiMonitorTimer = null;
+let aiMonitorSelectedTraceId = '';
+const aiMonitorFilters = {
+  flow: '',
+  status: '',
+  channel: '',
+};
 
 function showApiError(message) {
   const main = document.querySelector('.main');
@@ -80,6 +88,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (view === 'prospeccao') initProspeccaoView();
       if (view === 'config') initConfigView();
       if (view === 'logs') initLogsView();
+      if (view === 'ai-monitor') initAiMonitorView();
+      if (view === 'email-ops') initEmailOpsView();
     });
   });
 
@@ -119,6 +129,309 @@ async function loadSystemLogs() {
     pre.textContent = lines.length ? lines.join('\n') : 'Sem logs ainda. Gere algum evento (abrir telas, chamar APIs, disparar prospecção) e atualize.';
   } catch (err) {
     pre.textContent = 'Falha ao carregar logs: ' + (err.message || String(err));
+  }
+}
+
+/* ─── AI Monitor View ────────────────────────────────────────── */
+function formatDuration(durationMs) {
+  const value = Number.parseInt(durationMs || '0', 10);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  if (value < 1000) return `${value} ms`;
+  return `${(value / 1000).toFixed(2)} s`;
+}
+
+function aiStatusBadge(status) {
+  const safe = String(status || '').toLowerCase();
+  if (safe === 'ok') return '<span class="badge hot">ok</span>';
+  if (safe === 'fallback') return '<span class="badge warm">fallback</span>';
+  if (safe === 'running') return '<span class="badge medium">running</span>';
+  return '<span class="badge cold">error</span>';
+}
+
+function renderAiSummary(summary) {
+  document.getElementById('ai-kpi-total-hour').textContent = Number(summary.totalLastHour || 0).toLocaleString('pt-BR');
+  document.getElementById('ai-kpi-running').textContent = Number(summary.running || 0).toLocaleString('pt-BR');
+  document.getElementById('ai-kpi-ok').textContent = Number(summary.ok || 0).toLocaleString('pt-BR');
+  document.getElementById('ai-kpi-issues').textContent = Number((summary.fallback || 0) + (summary.error || 0)).toLocaleString('pt-BR');
+  document.getElementById('ai-kpi-latency').textContent = `${Number(summary.avgDurationMsLastHour || 0).toLocaleString('pt-BR')} ms`;
+}
+
+function renderAiRows(traces) {
+  const tbody = document.getElementById('ai-monitor-tbody');
+  if (!traces.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:#64748b">Nenhuma execução de IA encontrada para os filtros atuais.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = traces.map((trace) => `
+    <tr class="ai-monitor-row ${trace.id === aiMonitorSelectedTraceId ? 'active' : ''}" data-trace-id="${escapeAttr(trace.id)}">
+      <td>${formatDateTime(trace.startedAt)}</td>
+      <td>${escapeHtml(trace.flow || '—')}</td>
+      <td>${escapeHtml(trace.channel || '—')}</td>
+      <td>${escapeHtml(trace.leadName || trace.leadCnpj || '—')}</td>
+      <td>${aiStatusBadge(trace.status)}</td>
+      <td>${formatDuration(trace.durationMs)}</td>
+      <td title="${escapeAttr(trace.inputPreview || '')}">${escapeHtml((trace.inputPreview || '—').slice(0, 90))}</td>
+    </tr>
+  `).join('');
+}
+
+function renderAiTraceDetail(trace) {
+  const detail = document.getElementById('ai-monitor-detail');
+  if (!trace) {
+    detail.textContent = 'Execução não encontrada.';
+    return;
+  }
+  const steps = (trace.steps || []).map((step) => {
+    const meta = step.meta ? `\nmeta: ${JSON.stringify(step.meta)}` : '';
+    return `- [${formatDateTime(step.at)}] ${step.stage} · ${step.status}${step.durationMs ? ` · ${formatDuration(step.durationMs)}` : ''}${step.message ? `\n  ${step.message}` : ''}${meta}`;
+  }).join('\n');
+  detail.textContent = [
+    `ID: ${trace.id}`,
+    `Fluxo: ${trace.flow} | Canal: ${trace.channel}`,
+    `Status: ${trace.status} | Duração: ${formatDuration(trace.durationMs)}`,
+    `Início: ${formatDateTime(trace.startedAt)} | Fim: ${formatDateTime(trace.endedAt)}`,
+    `Lead: ${trace.leadName || '—'} (${trace.leadCnpj || '—'})`,
+    '',
+    `Entrada: ${trace.inputPreview || '—'}`,
+    `Saída: ${trace.outputPreview || '—'}`,
+    trace.error ? `Erro: ${trace.error}` : 'Erro: —',
+    '',
+    'Etapas:',
+    steps || '- sem etapas registradas',
+  ].join('\n');
+}
+
+async function loadAiTraceDetail(traceId) {
+  const payload = await fetchJson(`/api/ai/monitor/${encodeURIComponent(traceId)}`);
+  if (!payload.ok) throw new Error(payload.error || 'Falha ao carregar trace');
+  renderAiTraceDetail(payload.trace);
+}
+
+async function loadAiMonitorDashboard() {
+  const params = new URLSearchParams({
+    limit: '80',
+    ...(aiMonitorFilters.flow && { flow: aiMonitorFilters.flow }),
+    ...(aiMonitorFilters.status && { status: aiMonitorFilters.status }),
+    ...(aiMonitorFilters.channel && { channel: aiMonitorFilters.channel }),
+  });
+  const payload = await fetchJson(`/api/ai/monitor?${params.toString()}`);
+  if (!payload.ok) throw new Error(payload.error || 'Falha ao carregar monitor IA');
+  renderAiSummary(payload.summary || {});
+  renderAiRows(payload.traces || []);
+
+  const traces = payload.traces || [];
+  if (!traces.length) {
+    aiMonitorSelectedTraceId = '';
+    document.getElementById('ai-monitor-detail').textContent = 'Sem execuções para detalhar no momento.';
+    return;
+  }
+  if (!aiMonitorSelectedTraceId || !traces.some((item) => item.id === aiMonitorSelectedTraceId)) {
+    aiMonitorSelectedTraceId = traces[0].id;
+  }
+  await loadAiTraceDetail(aiMonitorSelectedTraceId);
+}
+
+function initAiMonitorView() {
+  if (!aiMonitorInitialized) {
+    aiMonitorInitialized = true;
+    document.getElementById('btn-ai-refresh').addEventListener('click', () => {
+      loadAiMonitorDashboard().catch((err) => showApiError(`Falha ao atualizar monitor IA: ${err.message}`));
+    });
+    document.getElementById('btn-ai-filter').addEventListener('click', () => {
+      aiMonitorFilters.flow = document.getElementById('ai-filter-flow').value;
+      aiMonitorFilters.status = document.getElementById('ai-filter-status').value;
+      aiMonitorFilters.channel = document.getElementById('ai-filter-channel').value;
+      loadAiMonitorDashboard().catch((err) => showApiError(`Falha ao filtrar monitor IA: ${err.message}`));
+    });
+    document.getElementById('ai-monitor-tbody').addEventListener('click', async (event) => {
+      const row = event.target.closest('.ai-monitor-row');
+      if (!row) return;
+      const traceId = row.getAttribute('data-trace-id');
+      if (!traceId) return;
+      aiMonitorSelectedTraceId = traceId;
+      try {
+        await loadAiTraceDetail(traceId);
+        Array.from(document.querySelectorAll('.ai-monitor-row')).forEach((item) => item.classList.remove('active'));
+        row.classList.add('active');
+      } catch (err) {
+        showApiError(`Falha ao carregar detalhe da execução: ${err.message}`);
+      }
+    });
+  }
+
+  loadAiMonitorDashboard().catch((err) => {
+    showApiError(`Falha ao carregar monitor IA: ${err.message}`);
+  });
+
+  if (!aiMonitorTimer) {
+    aiMonitorTimer = setInterval(() => {
+      const isActive = document.getElementById('view-ai-monitor').classList.contains('active');
+      if (!isActive) return;
+      loadAiMonitorDashboard().catch(() => {});
+    }, 8000);
+  }
+}
+
+/* ─── Email Ops View ─────────────────────────────────────────── */
+let emailOpsInitialized = false;
+let emailOpsTimer = null;
+const emailOpsFilters = {
+  status: '',
+  category: '',
+  needsReview: '',
+};
+
+function formatDateTime(value) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleString('pt-BR');
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, '&quot;');
+}
+
+function renderEmailWorkerStatus(status) {
+  document.getElementById('email-worker-state').textContent = status.connected ? 'Conectado' : (status.running ? 'Desconectado' : 'Desligado');
+  document.getElementById('email-worker-last-check').textContent = `Última checagem: ${formatDateTime(status.lastCheckAt)}`;
+  document.getElementById('email-worker-processed').textContent = Number(status.processedCount || 0).toLocaleString('pt-BR');
+  document.getElementById('email-worker-duplicates').textContent = Number(status.duplicateCount || 0).toLocaleString('pt-BR');
+  document.getElementById('email-worker-error').textContent = status.lastError ? String(status.lastError).slice(0, 80) : 'Sem erro';
+  document.getElementById('email-worker-error-at').textContent = status.lastErrorAt ? formatDateTime(status.lastErrorAt) : '—';
+}
+
+function reviewButtonLabel(entry) {
+  return entry.needs_review ? 'Marcar revisado' : 'Marcar pendente';
+}
+
+function categoryBadge(category) {
+  const safe = String(category || '').toLowerCase();
+  if (safe === 'opec') return '<span class="badge warm">opec</span>';
+  if (safe === 'spam') return '<span class="badge cold">spam</span>';
+  return '<span class="badge cool">oportunidade</span>';
+}
+
+function statusBadge(status) {
+  const safe = String(status || '').toLowerCase();
+  if (safe === 'done') return '<span class="badge hot">done</span>';
+  if (safe === 'done_with_attachment_errors') return '<span class="badge warm">done+anexos</span>';
+  if (safe === 'classified') return '<span class="badge medium">classified</span>';
+  return `<span class="badge cool">${escapeHtml(safe || 'received')}</span>`;
+}
+
+function renderEmailInboundRows(entries) {
+  const tbody = document.getElementById('email-ops-tbody');
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#64748b">Nenhum e-mail encontrado para os filtros atuais.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = entries.map((entry) => `
+    <tr>
+      <td>${formatDateTime(entry.received_at || entry.created_at)}</td>
+      <td>${categoryBadge(entry.classification)}</td>
+      <td>${statusBadge(entry.status)}</td>
+      <td title="${escapeAttr(entry.from_email || '')}">${escapeHtml(entry.from_email || '—')}</td>
+      <td title="${escapeAttr(entry.subject || '')}">${escapeHtml((entry.subject || 'Sem assunto').slice(0, 90))}</td>
+      <td>${Number(entry.total_attachments || 0)}</td>
+      <td>${entry.trello_card_url ? `<a class="link-site" target="_blank" href="${escapeAttr(entry.trello_card_url)}">Abrir card</a>` : '—'}</td>
+      <td>
+        <button class="btn btn-clear btn-email-review" data-email-id="${entry.id}" data-needs-review="${entry.needs_review ? 'true' : 'false'}">
+          ${reviewButtonLabel(entry)}
+        </button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function loadEmailOpsDashboard() {
+  const statusPayload = await fetchJson('/api/email/status');
+  if (!statusPayload.ok) throw new Error(statusPayload.error || 'Falha ao carregar status do worker');
+  renderEmailWorkerStatus(statusPayload.status);
+
+  const params = new URLSearchParams({
+    limit: '50',
+    ...(emailOpsFilters.status && { status: emailOpsFilters.status }),
+    ...(emailOpsFilters.category && { classification: emailOpsFilters.category }),
+    ...(emailOpsFilters.needsReview && { needs_review: emailOpsFilters.needsReview }),
+  });
+  const inboxPayload = await fetchJson(`/api/email/inbound?${params.toString()}`);
+  if (!inboxPayload.ok) throw new Error(inboxPayload.error || 'Falha ao carregar inbox');
+  renderEmailInboundRows(inboxPayload.entries || []);
+}
+
+async function forceEmailPoll() {
+  const res = await fetch('/api/email/poll', { method: 'POST' });
+  const payload = await res.json();
+  if (!res.ok || !payload.ok) throw new Error(payload.error || 'Falha ao varrer inbox');
+  return payload;
+}
+
+async function toggleEmailReview(emailId, currentNeedsReview) {
+  const nextNeedsReview = !currentNeedsReview;
+  const res = await fetch(`/api/email/inbound/${encodeURIComponent(emailId)}/review`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ needsReview: nextNeedsReview }),
+  });
+  const payload = await res.json();
+  if (!res.ok || !payload.ok) throw new Error(payload.error || 'Falha ao atualizar revisão');
+}
+
+function initEmailOpsView() {
+  if (!emailOpsInitialized) {
+    emailOpsInitialized = true;
+
+    document.getElementById('btn-email-filter').addEventListener('click', () => {
+      emailOpsFilters.status = document.getElementById('email-filter-status').value;
+      emailOpsFilters.category = document.getElementById('email-filter-category').value;
+      emailOpsFilters.needsReview = document.getElementById('email-filter-review').value;
+      loadEmailOpsDashboard().catch((err) => {
+        showApiError(`Erro ao filtrar inbox: ${err.message}`);
+      });
+    });
+
+    document.getElementById('btn-email-refresh').addEventListener('click', () => {
+      loadEmailOpsDashboard().catch((err) => showApiError(`Erro ao atualizar inbox: ${err.message}`));
+    });
+
+    document.getElementById('btn-email-poll').addEventListener('click', async () => {
+      try {
+        showApiError('Executando varredura IMAP manual...');
+        await forceEmailPoll();
+        await loadEmailOpsDashboard();
+        clearApiError();
+      } catch (err) {
+        showApiError(`Falha na varredura manual: ${err.message}`);
+      }
+    });
+
+    document.getElementById('email-ops-tbody').addEventListener('click', async (event) => {
+      const btn = event.target.closest('.btn-email-review');
+      if (!btn) return;
+      const emailId = Number.parseInt(btn.getAttribute('data-email-id') || '', 10);
+      if (!Number.isFinite(emailId)) return;
+      const currentNeedsReview = btn.getAttribute('data-needs-review') === 'true';
+      try {
+        await toggleEmailReview(emailId, currentNeedsReview);
+        await loadEmailOpsDashboard();
+      } catch (err) {
+        showApiError(`Falha ao atualizar revisão: ${err.message}`);
+      }
+    });
+  }
+
+  loadEmailOpsDashboard().catch((err) => {
+    showApiError(`Falha ao carregar Inbox OPEC: ${err.message}`);
+  });
+
+  if (!emailOpsTimer) {
+    emailOpsTimer = setInterval(() => {
+      const isActive = document.getElementById('view-email-ops').classList.contains('active');
+      if (!isActive) return;
+      loadEmailOpsDashboard().catch(() => {});
+    }, 20000);
   }
 }
 

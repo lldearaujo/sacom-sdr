@@ -39,6 +39,12 @@
       <a href="#" class="nav-item" data-view="logs" id="nav-logs">
         <span class="nav-icon">🧾</span> Logs
       </a>
+      <a href="#" class="nav-item" data-view="ai-monitor" id="nav-ai-monitor">
+        <span class="nav-icon">🧠</span> Monitor IA
+      </a>
+      <a href="#" class="nav-item" data-view="email-ops" id="nav-email-ops">
+        <span class="nav-icon">📥</span> Inbox OPEC
+      </a>
     </nav>
     <div class="sidebar-footer">
       <div class="legend-title">Classificação</div>
@@ -507,6 +513,176 @@
       <div class="chart-card">
         <div class="chart-title">Saída recente</div>
         <pre id="system-logs" class="system-logs">Carregando...</pre>
+      </div>
+    </div>
+
+    <!-- ── AI MONITOR VIEW ── -->
+    <div id="view-ai-monitor" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Monitor IA</h1>
+          <p class="subtitle">Rastreamento das execuções da IA em tempo real (RAG, classificação e insights)</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btn-ai-refresh">↻ Atualizar</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid" style="margin-bottom: 16px;">
+        <div class="kpi-card">
+          <div class="kpi-label">Execuções (1h)</div>
+          <div class="kpi-value" id="ai-kpi-total-hour">0</div>
+          <div class="kpi-sub">últimos 60 minutos</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Rodando</div>
+          <div class="kpi-value" id="ai-kpi-running">0</div>
+          <div class="kpi-sub">em andamento</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">OK</div>
+          <div class="kpi-value" id="ai-kpi-ok">0</div>
+          <div class="kpi-sub">finalizadas com sucesso</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Fallback / Erro</div>
+          <div class="kpi-value" id="ai-kpi-issues">0</div>
+          <div class="kpi-sub">degradações e falhas</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Latência média</div>
+          <div class="kpi-value" id="ai-kpi-latency">0 ms</div>
+          <div class="kpi-sub">execuções da última hora</div>
+        </div>
+      </div>
+
+      <div class="filters-bar">
+        <select id="ai-filter-flow" class="filter-select">
+          <option value="">Todos os fluxos</option>
+          <option value="whatsapp_rag_response">whatsapp_rag_response</option>
+          <option value="prospeccao_mensagem">prospeccao_mensagem</option>
+          <option value="email_classifier">email_classifier</option>
+          <option value="insights_estrategicos">insights_estrategicos</option>
+        </select>
+        <select id="ai-filter-status" class="filter-select">
+          <option value="">Todos os status</option>
+          <option value="running">running</option>
+          <option value="ok">ok</option>
+          <option value="fallback">fallback</option>
+          <option value="error">error</option>
+        </select>
+        <select id="ai-filter-channel" class="filter-select">
+          <option value="">Todos os canais</option>
+          <option value="whatsapp">whatsapp</option>
+          <option value="email">email</option>
+          <option value="dashboard">dashboard</option>
+        </select>
+        <button class="btn-filter" id="btn-ai-filter">Filtrar</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="leads-table">
+          <thead>
+            <tr>
+              <th>Início</th>
+              <th>Fluxo</th>
+              <th>Canal</th>
+              <th>Lead</th>
+              <th>Status</th>
+              <th>Duração</th>
+              <th>Entrada</th>
+            </tr>
+          </thead>
+          <tbody id="ai-monitor-tbody">
+            <tr><td colspan="7"><div class="loader"><div class="spinner"></div> Carregando...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="chart-card" style="margin-top: 16px;">
+        <div class="chart-title">Detalhes da execução selecionada</div>
+        <div id="ai-monitor-detail" class="ai-monitor-detail">
+          Selecione uma execução na tabela para ver o passo a passo da IA.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── EMAIL OPS VIEW ── -->
+    <div id="view-email-ops" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Inbox OPEC</h1>
+          <p class="subtitle">Acompanhamento e gestão do fluxo de e-mails e criação de cards no Trello</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-clear" id="btn-email-refresh">Atualizar</button>
+          <button class="btn btn-primary" id="btn-email-poll">Forçar varredura IMAP</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid" style="margin-bottom: 16px;">
+        <div class="kpi-card">
+          <div class="kpi-label">Worker</div>
+          <div class="kpi-value small" id="email-worker-state">—</div>
+          <div class="kpi-sub" id="email-worker-last-check">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Processados</div>
+          <div class="kpi-value" id="email-worker-processed">0</div>
+          <div class="kpi-sub">desde o boot</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Duplicados</div>
+          <div class="kpi-value" id="email-worker-duplicates">0</div>
+          <div class="kpi-sub">message-id/hash</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Último erro</div>
+          <div class="kpi-value small" id="email-worker-error">—</div>
+          <div class="kpi-sub" id="email-worker-error-at">—</div>
+        </div>
+      </div>
+
+      <div class="filters-bar">
+        <select id="email-filter-status" class="filter-select">
+          <option value="">Todos status</option>
+          <option value="received">received</option>
+          <option value="classified">classified</option>
+          <option value="done">done</option>
+          <option value="done_with_attachment_errors">done_with_attachment_errors</option>
+        </select>
+        <select id="email-filter-category" class="filter-select">
+          <option value="">Todas categorias</option>
+          <option value="opec">opec</option>
+          <option value="oportunidade">oportunidade</option>
+          <option value="spam">spam</option>
+        </select>
+        <select id="email-filter-review" class="filter-select">
+          <option value="">Review (todos)</option>
+          <option value="true">Somente pendentes review</option>
+          <option value="false">Somente revisados</option>
+        </select>
+        <button class="btn-filter" id="btn-email-filter">Filtrar</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="leads-table">
+          <thead>
+            <tr>
+              <th>Recebido</th>
+              <th>Categoria</th>
+              <th>Status</th>
+              <th>Remetente</th>
+              <th>Assunto</th>
+              <th>Anexos</th>
+              <th>Trello</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="email-ops-tbody">
+            <tr><td colspan="8"><div class="loader"><div class="spinner"></div> Carregando...</div></td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 

@@ -30,22 +30,37 @@ let isPolling = false;
 let shouldRun = false;
 let dbRef = null;
 
+function parseBooleanEnv(rawValue, defaultValue = false) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return defaultValue;
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
 function getConfig() {
   return {
     host: String(process.env.EMAIL_IMAP_HOST || '').trim(),
     port: Number.parseInt(process.env.EMAIL_IMAP_PORT || '993', 10),
-    secure: String(process.env.EMAIL_IMAP_SECURE || 'true').toLowerCase() !== 'false',
+    secure: parseBooleanEnv(process.env.EMAIL_IMAP_SECURE, true),
     user: String(process.env.EMAIL_IMAP_USER || '').trim(),
     pass: String(process.env.EMAIL_IMAP_PASS || '').trim(),
     mailbox: String(process.env.EMAIL_IMAP_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(10_000, Number.parseInt(process.env.EMAIL_POLL_INTERVAL_MS || '120000', 10)),
     maxAttachmentMb: Math.max(1, Number.parseInt(process.env.EMAIL_MAX_ATTACHMENT_MB || '15', 10)),
-    markSeenAfterProcess: String(process.env.EMAIL_MARK_SEEN_AFTER_PROCESS || 'true').toLowerCase() !== 'false',
+    markSeenAfterProcess: parseBooleanEnv(process.env.EMAIL_MARK_SEEN_AFTER_PROCESS, true),
+    tlsRejectUnauthorized: parseBooleanEnv(process.env.EMAIL_IMAP_TLS_REJECT_UNAUTHORIZED, true),
   };
 }
 
 function updateError(err) {
-  state.lastError = err && err.message ? err.message : String(err);
+  const baseMessage = err && err.message ? err.message : String(err);
+  const extraDetails = [];
+  if (err && err.code) extraDetails.push(`code=${err.code}`);
+  if (err && err.responseStatus) extraDetails.push(`imap_status=${err.responseStatus}`);
+  if (err && err.responseText) extraDetails.push(`imap_response=${String(err.responseText).slice(0, 300)}`);
+  if (err && err.serverResponseCode) extraDetails.push(`server_code=${err.serverResponseCode}`);
+  state.lastError = extraDetails.length ? `${baseMessage} (${extraDetails.join(', ')})` : baseMessage;
   state.lastErrorAt = new Date().toISOString();
   console.error('[EmailWorker] Erro:', state.lastError);
 }
@@ -266,6 +281,9 @@ async function connect() {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    tls: {
+      rejectUnauthorized: cfg.tlsRejectUnauthorized,
+    },
     auth: {
       user: cfg.user,
       pass: cfg.pass,
@@ -338,8 +356,14 @@ function getEmailWorkerStatus() {
   };
 }
 
+async function triggerManualPoll() {
+  await pollInbox();
+  return getEmailWorkerStatus();
+}
+
 module.exports = {
   startEmailWorker,
   stopEmailWorker,
   getEmailWorkerStatus,
+  triggerManualPoll,
 };

@@ -1,6 +1,7 @@
 'use strict';
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const aiObs = require('./ai-observability');
 
 const CLASSIFICATION_PROMPT = `Você classifica e-mails comerciais de uma empresa de mídia exterior.
 Retorne somente JSON válido (sem markdown) com este formato:
@@ -83,6 +84,11 @@ function toOutput(payload) {
 }
 
 async function classifyInboundEmail({ fromEmail, subject, bodyText }) {
+  const traceId = aiObs.startTrace({
+    flow: 'email_classifier',
+    channel: 'email',
+    inputPreview: `${String(subject || '').slice(0, 120)} | ${String(fromEmail || '').slice(0, 80)}`,
+  });
   const model = getModel();
   const prompt = `${CLASSIFICATION_PROMPT}
 
@@ -94,17 +100,23 @@ ${String(bodyText || '').slice(0, 5000)}
 `;
 
   try {
+    aiObs.addStep(traceId, { stage: 'gemini_classifier', status: 'running', message: 'Classificando e-mail com Gemini.' });
     const result = await model.generateContent(prompt);
     const raw = result.response.text();
     const parsed = safeParseJson(raw);
     if (!parsed) throw new Error('Resposta do classificador IA sem JSON válido.');
-    return {
+    const output = {
       ...toOutput(parsed),
       source: 'gemini',
       needsReview: false,
     };
+    aiObs.finishTrace(traceId, {
+      status: 'ok',
+      outputPreview: JSON.stringify({ category: output.category, confidence: output.confidence, summary: output.summary }),
+    });
+    return output;
   } catch (err) {
-    return {
+    const fallback = {
       category: 'oportunidade',
       confidence: 0,
       summary: 'Fallback por falha no classificador IA.',
@@ -119,6 +131,13 @@ ${String(bodyText || '').slice(0, 5000)}
       needsReview: true,
       error: err.message,
     };
+    aiObs.finishTrace(traceId, {
+      status: 'fallback',
+      error: err && err.message,
+      outputPreview: JSON.stringify({ category: fallback.category, summary: fallback.summary }),
+      fallbackUsed: true,
+    });
+    return fallback;
   }
 }
 

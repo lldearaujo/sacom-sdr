@@ -12,6 +12,7 @@ const cache = require('./cache');
 const media = require('./media');
 const whatsappInbound = require('./whatsapp-inbound');
 const { trunc } = require('./token-utils');
+const aiObs = require('./ai-observability');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -163,7 +164,7 @@ ${blocoIntent}
 
 // ─── CHAT COM RAG ─────────────────────────────────────────────────────────────
 
-async function processarMensagemRAG(lead, userInput) {
+async function processarMensagemRAG(lead, userInput, { traceId = null } = {}) {
   const userText =
     typeof userInput === 'string' ? userInput : (userInput && userInput.text) || '';
   const mediaParts =
@@ -174,10 +175,28 @@ async function processarMensagemRAG(lead, userInput) {
   const textoParaEmbedding = userText.trim() || '(conteúdo multimodal)';
 
   // 1. Monta o contexto injetado (System Instruction)
+  const t1 = Date.now();
   const systemInstructionText = await buildContextoRAG(lead, textoParaEmbedding);
+  if (traceId) {
+    aiObs.addStep(traceId, {
+      stage: 'contexto_rag',
+      status: 'ok',
+      durationMs: Date.now() - t1,
+      message: 'Contexto RAG montado com histórico e conhecimento.',
+    });
+  }
 
   // 2. Pega as últimas mensagens do histórico para manter a continuidade (via Redis/PG)
+  const t2 = Date.now();
   const historico = await cache.getConversaContexto(lead.cnpj, RAG_HISTORICO_LIMITE);
+  if (traceId) {
+    aiObs.addStep(traceId, {
+      stage: 'historico',
+      status: 'ok',
+      durationMs: Date.now() - t2,
+      message: `Histórico carregado (${historico.length} mensagens).`,
+    });
+  }
   
   // Converte formato interno {role, text} para formato do Gemini
   let geminiHistory = historico.map((m) => ({
@@ -213,6 +232,7 @@ async function processarMensagemRAG(lead, userInput) {
   });
 
   // 4. Envia mensagem para a IA (texto e/ou mídia multimodal)
+  const t3 = Date.now();
   let result;
   if (mediaParts.length > 0) {
     const prompt =
@@ -221,6 +241,15 @@ async function processarMensagemRAG(lead, userInput) {
     result = await chat.sendMessage([{ text: prompt }, ...mediaParts]);
   } else {
     result = await chat.sendMessage(userText);
+  }
+  if (traceId) {
+    aiObs.addStep(traceId, {
+      stage: 'gemini_response',
+      status: 'ok',
+      durationMs: Date.now() - t3,
+      message: 'Resposta gerada pelo Gemini.',
+      meta: { multimodal: mediaParts.length > 0 },
+    });
   }
   const respostaCompleta = result.response.text();
   
@@ -261,6 +290,14 @@ async function processarMensagemRAG(lead, userInput) {
 
   // Salva no histórico só o texto exibido ao lead (sem tags internas)
   await cache.appendMensagemConversa(lead.cnpj, 'model', finalResponse);
+  if (traceId) {
+    aiObs.addStep(traceId, {
+      stage: 'saida',
+      status: 'ok',
+      message: 'Resposta final preparada e gravada no histórico.',
+      meta: { hasIntent: Boolean(intent), mediaKeys: mediaKeys.length },
+    });
+  }
 
   return { resposta: finalResponse, intent, mediaKeys };
 }
